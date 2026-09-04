@@ -1,0 +1,20 @@
+# deps
+node_modules/
+# env
+.env
+.env.local
+# builds
+dist/
+build/
+# logs
+*.log
+npm-debug.log*
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+# postgres / local
+/tmp/opencode/
+pgdata/
+# vite
+*.local
