@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
 
 const app = express();
@@ -35,7 +37,13 @@ app.get('/api/employees', async (_req, res) => {
 });
 
 const port = Number(process.env.PORT || 4000);
-if (process.env.NODE_ENV !== 'test') {
+// Only listen when executed directly (`node src/index.js`), never when
+// imported (e.g. by tests) — otherwise the open server keeps the event
+// loop alive and `npm test` hangs forever in CI.
+const isDirectRun =
+  !!process.argv[1] &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isDirectRun) {
   app.listen(port, () => console.log(`backend listening on :${port}`));
 }
 

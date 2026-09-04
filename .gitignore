@@ -18,3 +18,4 @@ npm-debug.log*
 pgdata/
 # vite
 *.local
+AGENT.md
