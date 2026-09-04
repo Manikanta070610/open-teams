@@ -2,19 +2,15 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Pool } from 'pg';
+import adminRouter from './admin.js';
+import { pool } from './db.js';
 
 const app = express();
 app.use(express.json());
+// Single proxy hop (Render) so req.ip is the real client for login rate limiting.
+app.set('trust proxy', 1);
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || undefined,
-  host: process.env.PGHOST || 'localhost',
-  port: Number(process.env.PGPORT || 5432),
-  user: process.env.PGUSER,
-  password: process.env.PGPASSWORD,
-  database: process.env.PGDATABASE || 'office_mgmt_final',
-});
+app.use('/api/admin', adminRouter);
 
 app.get('/health', async (_req, res) => {
   try {
@@ -48,3 +44,4 @@ if (isDirectRun) {
 }
 
 export default app;
+export { pool };

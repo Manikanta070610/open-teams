@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
+import AdminPanel from './AdminPanel.jsx';
 
 export default function App() {
   const [health, setHealth] = useState('checking...');
   const [employees, setEmployees] = useState([]);
+  const [view, setView] = useState('directory');
 
   useEffect(() => {
     fetch('/api/employees')
@@ -18,6 +20,12 @@ export default function App() {
   return (
     <main style={{ fontFamily: 'system-ui', padding: 24 }}>
       <h1>Office Management System</h1>
+      <p>
+        <button disabled={view === 'directory'} onClick={() => setView('directory')}>Directory</button>{' '}
+        <button disabled={view === 'admin'} onClick={() => setView('admin')}>Admin</button>
+      </p>
+      {view === 'admin' ? <AdminPanel /> : (
+      <>
       <p>Backend: {health}</p>
       <h2>Employees</h2>
       {employees.length === 0 ? (
@@ -30,6 +38,8 @@ export default function App() {
             </li>
           ))}
         </ul>
+      )}
+      </>
       )}
     </main>
   );

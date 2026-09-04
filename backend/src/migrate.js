@@ -16,6 +16,7 @@ const FILES = [
   'db/06_indexes.sql',
   'db/07_seed.sql',
   'db/08_dept_governance.sql',
+  'db/09_admin.sql',
 ];
 
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL });

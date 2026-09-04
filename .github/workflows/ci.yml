@@ -27,7 +27,7 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: |
-          for f in db/01_core.sql db/02_projects.sql db/03_hr.sql db/04_collab_chat.sql db/05_triggers.sql db/06_indexes.sql db/07_seed.sql db/08_dept_governance.sql; do
+          for f in db/01_core.sql db/02_projects.sql db/03_hr.sql db/04_collab_chat.sql db/05_triggers.sql db/06_indexes.sql db/07_seed.sql db/08_dept_governance.sql db/09_admin.sql; do
             psql -h localhost -U postgres -d office_mgmt_final -v ON_ERROR_STOP=1 -q -f "$f"
           done
       - name: Seed count check
@@ -38,6 +38,19 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: office_mgmt_final
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
@@ -49,7 +62,15 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package.json
       - run: npm install
+      - name: Apply schema (for API tests)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/office_mgmt_final
+          SETUP_TOKEN: ci-setup-token
+        run: npm run migrate
       - run: npm test
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/office_mgmt_final
+          SETUP_TOKEN: ci-setup-token
 
   frontend:
     runs-on: ubuntu-latest

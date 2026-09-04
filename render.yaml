@@ -1,7 +1,7 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 # Creates: Postgres DB + backend web service + frontend static site.
 # Deploy: push to GitHub, then Render Dashboard > New > Blueprint > select repo.
-# DB schema is applied as a post-deploy job via `psql -f` in numeric order.
+# DB schema is applied pre-deploy via `npm --prefix backend run migrate` (01..09 in order).
 databases:
   - name: office-mgmt-db
     plan: free
