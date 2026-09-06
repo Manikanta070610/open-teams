@@ -4,15 +4,28 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import adminRouter from './admin.js';
 import authRouter, { requireAuth } from './auth.js';
+import workspaceRouter from './workspaces.js';
 import { pool } from './db.js';
 
 const app = express();
-app.use(express.json());
+app.disable('x-powered-by');
+app.use(express.json({ limit: '100kb' }));
 // Single proxy hop (Render) so req.ip is the real client for login rate limiting.
 app.set('trust proxy', 1);
 
+// Minimal security headers (no extra deps): API serves JSON only, never HTML.
+app.use((_req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'DENY');
+  res.set('Referrer-Policy', 'no-referrer');
+  next();
+});
+
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/workspaces', workspaceRouter);
+// Alias for spec compat: POST /workspaces, GET /workspaces, GET /workspaces/:id
+app.use('/workspaces', workspaceRouter);
 
 app.get('/health', async (_req, res) => {
   try {
@@ -44,6 +57,13 @@ const isDirectRun =
 if (isDirectRun) {
   app.listen(port, () => console.log(`backend listening on :${port}`));
 }
+
+// Central error handler: JSON only, never leak stacks to clients.
+app.use((err, _req, res, _next) => {
+  const status = Number(err?.status) >= 400 && Number(err?.status) < 600 ? err.status : 500;
+  if (status >= 500) console.error(err);
+  res.status(status).json({ error: status === 500 ? 'internal error' : String(err.message || 'error') });
+});
 
 export default app;
 export { pool };

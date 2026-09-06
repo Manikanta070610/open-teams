@@ -27,7 +27,7 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: |
-          for f in db/01_core.sql db/02_projects.sql db/03_hr.sql db/04_collab_chat.sql db/05_triggers.sql db/06_indexes.sql db/07_seed.sql db/08_dept_governance.sql db/09_admin.sql; do
+          for f in db/01_core.sql db/02_projects.sql db/03_hr.sql db/04_collab_chat.sql db/05_triggers.sql db/06_indexes.sql db/07_seed.sql db/08_dept_governance.sql db/09_admin.sql db/10_employee_auth.sql db/11_workspaces.sql; do
             psql -h localhost -U postgres -d office_mgmt_final -v ON_ERROR_STOP=1 -q -f "$f"
           done
       - name: Seed count check

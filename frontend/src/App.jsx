@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './AuthContext.jsx';
 import Login from './Login.jsx';
 import ChangePassword from './ChangePassword.jsx';
 import AdminPanel from './AdminPanel.jsx';
+import Workspaces from './Workspaces.jsx';
 
 function Directory() {
   const [health, setHealth] = useState('checking...');
@@ -80,11 +81,12 @@ function Shell() {
       <h1>Office Management System</h1>
       <p>
         <button disabled={view === 'directory'} onClick={() => setView('directory')}>Directory</button>{' '}
+        <button disabled={view === 'workspaces'} onClick={() => setView('workspaces')}>Workspaces</button>{' '}
         {user.isAdmin && (
           <button disabled={view === 'admin'} onClick={() => setView('admin')}>Admin</button>
         )}
       </p>
-      {view === 'admin' && user.isAdmin ? <AdminPanel /> : <Directory />}
+      {view === 'admin' && user.isAdmin ? <AdminPanel /> : view === 'workspaces' ? <Workspaces /> : <Directory />}
     </main>
   );
 }

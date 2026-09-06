@@ -90,8 +90,8 @@ async function createRefreshSession(employeeId, req, inactivityDays) {
       inactivityDays,
       String(req.get('user-agent') || '').slice(0, 256),
       (() => {
-        const ip = req.ip;
-        return ip && ip.includes('.') ? ip.split(',')[0].trim() : null;
+        const ip = String(req.ip || '').split(',')[0].trim();
+        return ip || null;
       })(),
     ]
   );

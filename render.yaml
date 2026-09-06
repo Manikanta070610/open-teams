@@ -1,7 +1,7 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 # Creates: Postgres DB + backend web service + frontend static site.
 # Deploy: push to GitHub, then Render Dashboard > New > Blueprint > select repo.
-# DB schema is applied pre-deploy via `npm --prefix backend run migrate` (01..10 in order).
+# DB schema is applied pre-deploy via `npm --prefix backend run migrate` (01..11 in order).
 databases:
   - name: office-mgmt-db
     plan: free
@@ -28,8 +28,7 @@ services:
       - key: COOKIE_SECURE
         value: true
     # Schema is applied with the backend's migrate script (Node pg, no psql needed).
-    # NOTE: 07_seed.sql is not idempotent — run migrate manually once via
-    # Render Shell on first deploy, then remove it from the chain or guard it.
+    # NOTE: 07_seed.sql is rerunnable (ON CONFLICT DO NOTHING) — safe to run on every deploy.
     preDeployCommand: npm --prefix backend install && npm --prefix backend run migrate
 
   - type: web
