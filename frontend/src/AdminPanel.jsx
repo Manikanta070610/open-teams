@@ -1,68 +1,25 @@
 import { useEffect, useState } from 'react';
-import { api, setToken } from './adminApi.js';
+import { api } from './adminApi.js';
+import { useAuth } from './AuthContext.jsx';
 
-const TABS = ['Overview', 'Employees', 'Domains', 'Access'];
+const TABS = ['Overview', 'Employees', 'Domains', 'Access', 'Security'];
 
 function Err({ msg }) {
   if (!msg) return null;
   return <p style={{ color: 'darkred' }}>Error: {msg}</p>;
 }
 
-function Login({ onLogin }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [setupToken, setSetupToken] = useState('');
-  const [msg, setMsg] = useState('');
-
-  async function login(e) {
-    e.preventDefault();
-    setMsg('');
-    try {
-      const r = await api('/api/admin/login', { method: 'POST', body: { email, password } });
-      onLogin(r.token);
-    } catch (err) {
-      setMsg(err.message);
-    }
-  }
-
-  async function bootstrap() {
-    setMsg('');
-    try {
-      await api('/api/admin/bootstrap', {
-        method: 'POST',
-        body: { email, password, setupToken },
-      });
-      const r = await api('/api/admin/login', { method: 'POST', body: { email, password } });
-      onLogin(r.token);
-    } catch (err) {
-      setMsg(err.message);
-    }
-  }
-
+function InviteCard({ invite, onClose }) {
+  if (!invite) return null;
   return (
-    <section>
-      <h2>Admin login</h2>
-      <p>Owner (rank 6) or IT department, with a password set up.</p>
-      <form onSubmit={login}>
-        <input placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <input
-          placeholder="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-        <button type="submit">Log in</button>
-      </form>
-      <h3>First-time setup</h3>
-      <p>Paste the one-time setup token to create a password for the email above, then log in.</p>
-      <input
-        placeholder="setup token"
-        value={setupToken}
-        onChange={(e) => setSetupToken(e.target.value)}
-      />
-      <button onClick={bootstrap}>Create admin access</button>
-      <Err msg={msg} />
-    </section>
+    <div style={{ border: '2px solid green', padding: 8, margin: '8px 0' }}>
+      <strong>Login created — share once, then it’s unrecoverable:</strong>
+      <br />Company email: <code>{invite.email}</code>
+      <br />Temporary password: <code>{invite.tempPassword}</code>
+      <br />
+      <small>Send these to the employee’s personal email. They must set a new password on first login.</small>{' '}
+      <button onClick={onClose}>Dismiss</button>
+    </div>
   );
 }
 
@@ -120,7 +77,8 @@ function Employees() {
   const [err, setErr] = useState('');
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({});
-  const [creating, setCreating] = useState({ first_name: '', last_name: '', email: '', rank: 2, department_id: '' });
+  const [creating, setCreating] = useState({ first_name: '', last_name: '', email: '', contact_email: '', password: '', rank: 2, department_id: '' });
+  const [invite, setInvite] = useState(null);
 
   async function load(p = page, query = q, signal) {
     try {
@@ -148,8 +106,9 @@ function Employees() {
   async function create(e) {
     e.preventDefault();
     try {
-      await api('/api/admin/employees', { method: 'POST', body: { ...creating, rank: Number(creating.rank), department_id: Number(creating.department_id) } });
-      setCreating({ first_name: '', last_name: '', email: '', rank: 2, department_id: '' });
+      const r = await api('/api/admin/employees', { method: 'POST', body: { ...creating, rank: Number(creating.rank), department_id: Number(creating.department_id), password: creating.password || undefined, contact_email: creating.contact_email || undefined } });
+      setCreating({ first_name: '', last_name: '', email: '', contact_email: '', password: '', rank: 2, department_id: '' });
+      if (r.tempPassword) setInvite({ email: r.email, tempPassword: r.tempPassword });
       load(1, '');
     } catch (e2) {
       setErr(e2.message);
@@ -207,10 +166,14 @@ function Employees() {
       </table>
       <p>Total {list.total}. Page {page}. <button disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</button> <button onClick={() => setPage(page + 1)}>Next</button></p>
       <h3>Add employee</h3>
+      <p style={{ color: '#555' }}>Company email is the login. The initial password is shown once below — send it to their personal email; they must change it on first login.</p>
+      <InviteCard invite={invite} onClose={() => setInvite(null)} />
       <form onSubmit={create}>
         <input placeholder="first" value={creating.first_name} onChange={(e) => setCreating({ ...creating, first_name: e.target.value })} />
         <input placeholder="last" value={creating.last_name} onChange={(e) => setCreating({ ...creating, last_name: e.target.value })} />
-        <input placeholder="email" value={creating.email} onChange={(e) => setCreating({ ...creating, email: e.target.value })} />
+        <input placeholder="company email" value={creating.email} onChange={(e) => setCreating({ ...creating, email: e.target.value })} />
+        <input placeholder="personal email (invite goes here)" value={creating.contact_email} onChange={(e) => setCreating({ ...creating, contact_email: e.target.value })} />
+        <input placeholder="initial password (min 8)" type="password" value={creating.password} onChange={(e) => setCreating({ ...creating, password: e.target.value })} />
         <select value={creating.rank} onChange={(e) => setCreating({ ...creating, rank: e.target.value })}>
           {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>rank {n}</option>)}
         </select>
@@ -286,6 +249,7 @@ function Access() {
   const [q, setQ] = useState('');
   const [list, setList] = useState({ rows: [], total: 0 });
   const [err, setErr] = useState('');
+  const [invite, setInvite] = useState(null);
 
   async function load(signal) {
     try {
@@ -314,17 +278,29 @@ function Access() {
     }
   }
 
+  async function resetPassword(r) {
+    if (!window.confirm(`Reset password for ${r.email}? They get a temporary password and must change it on next login. All their sessions are revoked.`)) return;
+    try {
+      const res = await api(`/api/admin/employees/${r.id}/reset-password`, { method: 'POST' });
+      setInvite({ email: r.email, tempPassword: res.tempPassword });
+      setErr('');
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
   return (
     <section>
       <h2>Access</h2>
       <p>Deactivating removes access immediately (record kept). Rank decides who can delegate to whom.</p>
+      <InviteCard invite={invite} onClose={() => setInvite(null)} />
       <form onSubmit={(e) => { e.preventDefault(); load(); }}>
         <input placeholder="search email / last name" value={q} onChange={(e) => setQ(e.target.value)} />
         <button type="submit">Search</button>
       </form>
       <Err msg={err} />
       <table border="1" cellPadding="4">
-        <thead><tr><th>Email</th><th>Name</th><th>Rank</th><th>Dept</th><th>Active</th></tr></thead>
+        <thead><tr><th>Email</th><th>Name</th><th>Rank</th><th>Dept</th><th>Active</th><th></th></tr></thead>
         <tbody>
           {list.rows.map((r) => (
             <tr key={r.id}>
@@ -333,6 +309,7 @@ function Access() {
               <td>{r.rank}</td>
               <td>{r.department}</td>
               <td><input type="checkbox" checked={r.is_active} onChange={() => toggle(r)} /></td>
+              <td><button onClick={() => resetPassword(r)}>Reset password</button></td>
             </tr>
           ))}
         </tbody>
@@ -341,32 +318,137 @@ function Access() {
   );
 }
 
+function Security() {
+  const [policy, setPolicy] = useState(null);
+  const [days, setDays] = useState(7);
+  const [restrict, setRestrict] = useState(false);
+  const [ips, setIps] = useState([]);
+  const [newIp, setNewIp] = useState('');
+  const [label, setLabel] = useState('');
+  const [auditRows, setAuditRows] = useState([]);
+  const [err, setErr] = useState('');
+
+  async function load(signal) {
+    try {
+      const p = await api('/api/admin/auth-policy', { signal });
+      setPolicy(p);
+      setDays(p.inactivityTimeoutDays);
+      setRestrict(p.ipRestrictionEnabled);
+      setIps(await api('/api/admin/allowed-ips', { signal }));
+      setAuditRows(await api('/api/admin/audit?limit=30', { signal }));
+      setErr('');
+    } catch (e) {
+      if (e.name !== 'AbortError') setErr(e.message);
+    }
+  }
+  useEffect(() => {
+    const c = new AbortController();
+    load(c.signal);
+    return () => c.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function savePolicy(e) {
+    e.preventDefault();
+    try {
+      const p = await api('/api/admin/auth-policy', {
+        method: 'PATCH',
+        body: { inactivityTimeoutDays: Number(days), ipRestrictionEnabled: restrict },
+      });
+      setPolicy(p);
+      setErr('');
+    } catch (e2) {
+      setErr(e2.message);
+    }
+  }
+
+  async function addIp(e) {
+    e.preventDefault();
+    try {
+      await api('/api/admin/allowed-ips', { method: 'POST', body: { cidr: newIp, label } });
+      setNewIp('');
+      setLabel('');
+      load();
+    } catch (e2) {
+      setErr(e2.message);
+    }
+  }
+
+  async function removeIp(id, cidr) {
+    if (!window.confirm(`Remove ${cidr} from admin access? Admins on that network lose access immediately.`)) return;
+    try {
+      await api(`/api/admin/allowed-ips/${id}`, { method: 'DELETE' });
+      load();
+    } catch (e) {
+      setErr(e.message);
+    }
+  }
+
+  return (
+    <section>
+      <h2>Security</h2>
+      <Err msg={err} />
+      <h3>Session policy</h3>
+      <form onSubmit={savePolicy}>
+        <label>
+          Ask for password again after{' '}
+          <input type="number" min="1" max="90" value={days} onChange={(e) => setDays(e.target.value)} style={{ width: '4em' }} />{' '}
+          days of inactivity
+        </label>{' '}
+        <button type="submit">Save</button>
+      </form>
+      <p style={{ color: '#555' }}>Employees stay signed in automatically until they’re inactive this long (default 7 days). Applies to future sessions; already-idle sessions beyond the new limit are revoked.</p>
+      <h3>Admin IP restriction: {policy ? (policy.ipRestrictionEnabled ? 'ON' : 'OFF') : '…'}</h3>
+      <form onSubmit={savePolicy}>
+        <label>
+          <input type="checkbox" checked={restrict} onChange={(e) => setRestrict(e.target.checked)} />{' '}
+          Restrict admin logins to the IPs below
+        </label>{' '}
+        <button type="submit">Save</button>
+      </form>
+      <p style={{ border: '1px solid #ccc', padding: 8 }}>
+        Employees can always log in from anywhere. When this is <strong>ON</strong>, admin accounts
+        only work from the listed IPs — any other network is blocked even with the right password.
+        When <strong>OFF</strong>, admins can log in from any network. {ips.length === 0 && restrict && (
+          <strong style={{ color: 'darkred' }}> Warning: the list is empty, so NO admin can log in until you add an IP.</strong>
+        )}
+      </p>
+      <ul>
+        {ips.map((r) => (
+          <li key={r.id}><code>{r.cidr}</code> {r.label ? `(${r.label})` : ''} <button onClick={() => removeIp(r.id, r.cidr)}>Remove</button></li>
+        ))}
+      </ul>
+      <form onSubmit={addIp}>
+        <input placeholder="203.0.113.8 or 203.0.113.0/24" value={newIp} onChange={(e) => setNewIp(e.target.value)} style={{ width: '20em' }} />
+        <input placeholder="label (e.g. office)" value={label} onChange={(e) => setLabel(e.target.value)} />
+        <button type="submit">Allow IP</button>
+      </form>
+      <h3>Recent auth activity</h3>
+      <ul>
+        {auditRows.map((r) => (
+          <li key={r.id}>{r.created_at} — {r.action} {r.ip ? `(${r.ip})` : ''}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export default function AdminPanel() {
-  const [authed, setAuthed] = useState(false);
+  const { logout } = useAuth();
   const [tab, setTab] = useState('Overview');
 
-  function login(token) {
-    setToken(token);
-    setAuthed(true);
-  }
-  function logout() {
-    api('/api/admin/logout', { method: 'POST' }).catch(() => {});
-    setToken(null);
-    setAuthed(false);
-  }
-
-  if (!authed) return <Login onLogin={login} />;
   return (
     <section>
       <h2>Admin panel</h2>
       {TABS.map((t) => (
         <button key={t} disabled={t === tab} onClick={() => setTab(t)}>{t}</button>
       ))}
-      {' '}<button onClick={logout}>Log out</button>
+      {' '}<button onClick={() => logout(false)}>Log out</button>
       {tab === 'Overview' && <Overview />}
       {tab === 'Employees' && <Employees />}
       {tab === 'Domains' && <Domains />}
       {tab === 'Access' && <Access />}
+      {tab === 'Security' && <Security />}
     </section>
   );
 }

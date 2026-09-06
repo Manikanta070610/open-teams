@@ -1,11 +1,24 @@
-// admin.js — Admin panel API: auth (password + opaque sessions) + allowlist,
-// employee management, access control, overview. Mounted at /api/admin.
+// admin.js — Admin panel API: auth (password + opaque sessions, plus new JWE access
+// tokens from /api/auth) + allowlist, employee management, access control, overview.
+// Mounted at /api/admin.
 // Auth model: employee email + password; only active rank-6 (Owner) or
-// IT-department employees are eligible. Sessions are opaque tokens stored
-// as SHA-256 in admin_sessions with a 30-minute expiry.
+// IT-department employees are eligible. Legacy sessions are opaque tokens stored
+// as SHA-256 in admin_sessions with a 30-minute expiry; new logins issue
+// encrypted JWT (JWE) access tokens verified statelessly, with password-version
+// revocation. Admin logins additionally honor the optional IP allowlist.
+import { randomBytes } from 'node:crypto';
+import { isIP } from 'node:net';
 import { Router } from 'express';
 import { hashPassword, newToken, setupTokenMatches, sha256hex, verifyPassword } from './crypto.js';
 import { pool } from './db.js';
+import { _resetRateLimits } from './ratelimit.js';
+import {
+  audit,
+  getInactivityDays,
+  isAdminIpAllowed,
+  isIpRestrictionEnabled,
+} from './settings.js';
+import { verifyAccessToken } from './tokens.js';
 
 export const router = Router();
 
@@ -21,6 +34,7 @@ const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])
 const loginAttempts = new Map(); // ip -> { count, resetAt }
 export function _resetLoginAttempts() {
   loginAttempts.clear();
+  _resetRateLimits();
 }
 function loginAllowed(ip) {
   const now = Date.now();
@@ -38,22 +52,51 @@ function eligible(row) {
   return !!row && row.is_active === true && (row.rank === 6 || row.dept_name === 'IT');
 }
 
-// --- auth middleware: valid unexpired session + still eligible ---
+// --- auth middleware: JWE access token OR legacy opaque session, then
+// eligibility + optional admin IP allowlist ---
 export async function requireAdmin(req, res, next) {
   res.set('Cache-Control', 'no-store');
   try {
     const m = /^Bearer (.+)$/.exec(req.get('authorization') || '');
     if (!m) return res.status(401).json({ error: 'unauthorized' });
-    const { rows } = await pool.query(
-      `SELECT e.id, e.email, e.rank, e.is_active, d.name AS dept_name
-         FROM admin_sessions s
-         JOIN employees e ON e.id = s.employee_id
-         JOIN departments d ON d.id = e.department_id
-        WHERE s.token_hash = $1 AND s.expires_at > now()`,
-      [sha256hex(m[1])]
-    );
-    const a = rows[0];
+    let a = null;
+    // 1. Try new encrypted JWT first (stateless decrypt + live eligibility check).
+    try {
+      const claims = await verifyAccessToken(m[1]);
+      const { rows } = await pool.query(
+        `SELECT e.id, e.email, e.rank, e.is_active, e.password_version, d.name AS dept_name
+           FROM employees e JOIN departments d ON d.id = e.department_id
+          WHERE e.id = $1`,
+        [claims.id]
+      );
+      const emp = rows[0];
+      if (
+        emp &&
+        emp.is_active === true &&
+        Number(emp.password_version ?? 1) === Number(claims.password_version ?? 1)
+      ) {
+        a = emp;
+      }
+    } catch {
+      a = null;
+    }
+    // 2. Fall back to legacy opaque session.
+    if (!a) {
+      const { rows } = await pool.query(
+        `SELECT e.id, e.email, e.rank, e.is_active, d.name AS dept_name
+           FROM admin_sessions s
+           JOIN employees e ON e.id = s.employee_id
+           JOIN departments d ON d.id = e.department_id
+          WHERE s.token_hash = $1 AND s.expires_at > now()`,
+        [sha256hex(m[1])]
+      );
+      a = rows[0] || null;
+    }
     if (!eligible(a)) return res.status(401).json({ error: 'unauthorized' });
+    if (!(await isAdminIpAllowed(req.ip))) {
+      await audit(a.id, 'admin-blocked-ip', req.ip);
+      return res.status(403).json({ error: 'admin access is restricted to allowed IP addresses' });
+    }
     req.admin = { id: a.id, email: a.email, rank: a.rank };
     return next();
   } catch (err) {
@@ -61,17 +104,49 @@ export async function requireAdmin(req, res, next) {
   }
 }
 
+// --- CIDR validation (IPv4/IPv6, bare IP treated as /32 or /128) ---
+function normalizeCidr(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+  if (raw.includes('/')) {
+    const [addr, bits] = raw.split('/');
+    if (!isIP(addr)) return null;
+    const max = addr.includes(':') ? 128 : 32;
+    const n = Number(bits);
+    if (!Number.isInteger(n) || n < 0 || n > max) return null;
+    return `${addr}/${n}`;
+  }
+  if (!isIP(raw)) return null;
+  return raw.includes(':') ? `${raw}/128` : `${raw}/32`;
+}
+
+function tempPassword() {
+  // 16 URL-safe chars; must be delivered once (invite card) then forced to change.
+  return randomBytes(12).toString('base64').replace(/[^A-Za-z0-9]/g, 'x').slice(0, 16).padEnd(16, 'A');
+}
+
 // --- first-time credential creation, guarded by one-time SETUP_TOKEN ---
 router.post('/bootstrap', async (req, res, next) => {
   try {
     const setupToken = process.env.SETUP_TOKEN;
     if (!setupToken) return res.status(403).json({ error: 'bootstrap disabled' });
-    const { email, password, setupToken: provided } = req.body || {};
+    const { email, password, setupToken: provided, restrictAdminByIp, adminAllowedIps } =
+      req.body || {};
     if (!setupTokenMatches(provided, setupToken)) {
       return res.status(403).json({ error: 'bootstrap disabled' });
     }
     if (!email || !password || String(password).length < MIN_PASSWORD_LEN) {
       return res.status(400).json({ error: 'email and password (min 8 chars) required' });
+    }
+    // Optional admin IP restriction, chosen at setup. Empty + enabled = deny-all,
+    // so require at least one valid entry when turning it on.
+    let cidrs = [];
+    if (restrictAdminByIp === true) {
+      const list = Array.isArray(adminAllowedIps) ? adminAllowedIps : [];
+      cidrs = list.map(normalizeCidr).filter(Boolean);
+      if (cidrs.length === 0) {
+        return res.status(400).json({ error: 'add at least one allowed IP address to enable restriction' });
+      }
     }
     const emp = await pool.query(
       `SELECT e.id, e.is_active, e.rank, d.name AS dept_name
@@ -89,6 +164,23 @@ router.post('/bootstrap', async (req, res, next) => {
       emp.rows[0].id,
       await hashPassword(String(password)),
     ]);
+    try {
+      // Persist the setup-time IP choice (best-effort: pre-10 DBs lack the tables).
+      await pool.query(
+        `INSERT INTO auth_settings (key, value) VALUES ('admin_ip_restriction_enabled', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [restrictAdminByIp === true ? 'true' : 'false']
+      );
+      for (const cidr of [...new Set(cidrs)]) {
+        await pool.query(
+          'INSERT INTO admin_allowed_ips (cidr, label, created_by) VALUES ($1, $2, $3) ON CONFLICT (cidr) DO NOTHING',
+          [cidr, 'setup', emp.rows[0].id]
+        );
+      }
+    } catch {
+      /* pre-migration DB: IP restriction unavailable */
+    }
+    await audit(emp.rows[0].id, 'bootstrap', req.ip);
     return res.status(201).json({ ok: true });
   } catch (err) {
     return next(err);
@@ -122,6 +214,10 @@ router.post('/login', async (req, res, next) => {
       return res.status(401).json({ error: 'invalid credentials' });
     }
     if (!eligible(row)) return res.status(403).json({ error: 'admin access required' });
+    if (!(await isAdminIpAllowed(req.ip))) {
+      await audit(row.id, 'admin-blocked-ip', req.ip);
+      return res.status(403).json({ error: 'admin access is restricted to allowed IP addresses' });
+    }
     await pool.query('DELETE FROM admin_sessions WHERE expires_at < now()');
     const token = newToken();
     const { rows } = await pool.query(
@@ -139,7 +235,15 @@ router.post('/login', async (req, res, next) => {
 router.post('/logout', requireAdmin, async (req, res, next) => {
   try {
     const m = /^Bearer (.+)$/.exec(req.get('authorization') || '');
-    await pool.query('DELETE FROM admin_sessions WHERE token_hash = $1', [sha256hex(m[1])]);
+    // Legacy opaque tokens are revoked; JWE access tokens are stateless and
+    // simply expire (refresh cookie is cleared via /api/auth/logout).
+    if (m) {
+      try {
+        await pool.query('DELETE FROM admin_sessions WHERE token_hash = $1', [sha256hex(m[1])]);
+      } catch {
+        /* JWE presented: nothing to delete */
+      }
+    }
     return res.status(204).end();
   } catch (err) {
     return next(err);
@@ -226,19 +330,52 @@ router.get('/employees', requireAdmin, async (req, res, next) => {
 
 router.post('/employees', requireAdmin, async (req, res, next) => {
   try {
-    const { first_name, last_name, email, rank, department_id, manager_id } = req.body || {};
+    const { first_name, last_name, email, rank, department_id, manager_id, contact_email, password } =
+      req.body || {};
     const r = Number(rank);
     if (!first_name || !last_name || !email || !Number.isInteger(r) || r < 1 || r > 6 || !department_id) {
       return res.status(400).json({ error: 'first/last/email/rank(1-6)/department required' });
     }
+    if (password !== undefined && (String(password).length < MIN_PASSWORD_LEN || String(password).length > 200)) {
+      return res.status(400).json({ error: 'password must be 8-200 chars' });
+    }
     try {
-      const { rows } = await pool.query(
-        `INSERT INTO employees (first_name, last_name, email, rank, department_id, manager_id)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, first_name, last_name, email, rank, department_id, manager_id, is_active`,
-        [first_name, last_name, email, r, department_id, manager_id || null]
-      );
-      return res.status(201).json(rows[0]);
+      // contact_email is new in 10_; fall back gracefully on pre-migration DBs.
+      let rows;
+      try {
+        ({ rows } = await pool.query(
+          `INSERT INTO employees (first_name, last_name, email, rank, department_id, manager_id, contact_email)
+           VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))
+           RETURNING id, first_name, last_name, email, rank, department_id, manager_id, is_active`,
+          [first_name, last_name, email, r, department_id, manager_id || null, contact_email || null]
+        ));
+      } catch (err) {
+        if (err.code !== '42703') throw err;
+        ({ rows } = await pool.query(
+          `INSERT INTO employees (first_name, last_name, email, rank, department_id, manager_id)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING id, first_name, last_name, email, rank, department_id, manager_id, is_active`,
+          [first_name, last_name, email, r, department_id, manager_id || null]
+        ));
+      }
+      // Provision login at joining when a password is supplied: company email +
+      // initial password (must change on first login). Omitted password keeps
+      // the old behavior (credential created later via bootstrap/reset).
+      let tempPasswordShown = null;
+      if (password !== undefined) {
+        await pool.query(
+          `INSERT INTO admin_credentials (employee_id, password_hash, must_change_password)
+           VALUES ($1, $2, TRUE)
+           ON CONFLICT (employee_id) DO UPDATE SET password_hash = EXCLUDED.password_hash, must_change_password = TRUE`,
+          [rows[0].id, await hashPassword(String(password))]
+        );
+        await pool.query('UPDATE employees SET password_version = password_version + 1 WHERE id = $1', [
+          rows[0].id,
+        ]);
+        tempPasswordShown = String(password);
+      }
+      await audit(req.admin.id, `employee-create:${rows[0].id}`, req.ip);
+      return res.status(201).json({ ...rows[0], tempPassword: tempPasswordShown });
     } catch (err) {
       // FK / unique / domain-trigger violations all surface here with DB messages.
       return res.status(400).json({ error: err.message });
@@ -252,6 +389,7 @@ const PATCHABLE = new Set([
   'first_name',
   'last_name',
   'email',
+  'contact_email',
   'rank',
   'department_id',
   'manager_id',
@@ -288,6 +426,151 @@ router.patch('/employees/:id', requireAdmin, async (req, res, next) => {
       return res.status(400).json({ error: err.message });
     }
   } catch (err) {
+    return next(err);
+  }
+});
+
+// --- session policy + admin IP allowlist + password reset ---
+router.get('/auth-policy', requireAdmin, async (_req, res, next) => {
+  try {
+    const days = await getInactivityDays();
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      inactivityTimeoutDays: days,
+      ipRestrictionEnabled: await isIpRestrictionEnabled(),
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.patch('/auth-policy', requireAdmin, async (req, res, next) => {
+  try {
+    const days = Number(req.body?.inactivityTimeoutDays);
+    const restrict = req.body?.ipRestrictionEnabled;
+    if (days !== undefined) {
+      if (!Number.isInteger(days) || days < 1 || days > 90) {
+        return res.status(400).json({ error: 'inactivityTimeoutDays must be 1-90' });
+      }
+      await pool.query(
+        `INSERT INTO auth_settings (key, value) VALUES ('inactivity_timeout_days', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [String(days)]
+      );
+      // Prune sessions already idle beyond the new window.
+      await pool.query(
+        `UPDATE auth_refresh_sessions SET revoked_at = now()
+          WHERE revoked_at IS NULL AND last_seen_at < now() - make_interval(days => $1)`,
+        [days]
+      );
+    }
+    if (restrict !== undefined) {
+      await pool.query(
+        `INSERT INTO auth_settings (key, value) VALUES ('admin_ip_restriction_enabled', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [restrict ? 'true' : 'false']
+      );
+    }
+    const { _clearSettingsCache } = await import('./settings.js');
+    _clearSettingsCache();
+    await audit(req.admin.id, 'auth-policy-change', req.ip);
+    return res.json({
+      inactivityTimeoutDays: await getInactivityDays(),
+      ipRestrictionEnabled: await isIpRestrictionEnabled(),
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.get('/allowed-ips', requireAdmin, async (_req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, cidr, label, created_at FROM admin_allowed_ips ORDER BY cidr'
+    );
+    return res.json(rows);
+  } catch (err) {
+    if (err.code === '42P01') return res.json([]); // pre-migration DB
+    return next(err);
+  }
+});
+
+router.post('/allowed-ips', requireAdmin, async (req, res, next) => {
+  try {
+    const cidr = normalizeCidr(req.body?.cidr);
+    if (!cidr) return res.status(400).json({ error: 'invalid IP or CIDR (e.g. 203.0.113.8 or 203.0.113.0/24)' });
+    try {
+      const { rows } = await pool.query(
+        'INSERT INTO admin_allowed_ips (cidr, label, created_by) VALUES ($1, $2, $3) RETURNING id, cidr, label, created_at',
+        [cidr, String(req.body?.label || '').slice(0, 100) || null, req.admin.id]
+      );
+      await audit(req.admin.id, `allow-ip:${cidr}`, req.ip);
+      return res.status(201).json(rows[0]);
+    } catch (err) {
+      if (err.code === '23505') return res.status(409).json({ error: 'IP already allowed' });
+      throw err;
+    }
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.delete('/allowed-ips/:id', requireAdmin, async (req, res, next) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM admin_allowed_ips WHERE id = $1', [
+      req.params.id,
+    ]);
+    if (rowCount === 0) return res.status(404).json({ error: 'entry not found' });
+    await audit(req.admin.id, `remove-allow-ip:${req.params.id}`, req.ip);
+    return res.status(204).end();
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Admin reset: issues a one-time temp password, revokes all sessions, forces change.
+router.post('/employees/:id/reset-password', requireAdmin, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query('SELECT id FROM employees WHERE id = $1', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'employee not found' });
+    const temp = tempPassword();
+    await pool.query(
+      `INSERT INTO admin_credentials (employee_id, password_hash, must_change_password)
+       VALUES ($1, $2, TRUE)
+       ON CONFLICT (employee_id) DO UPDATE SET password_hash = EXCLUDED.password_hash, must_change_password = TRUE`,
+      [req.params.id, await hashPassword(temp)]
+    );
+    await pool.query('UPDATE employees SET password_version = password_version + 1 WHERE id = $1', [
+      req.params.id,
+    ]);
+    try {
+      await pool.query(
+        'UPDATE auth_refresh_sessions SET revoked_at = now() WHERE employee_id = $1 AND revoked_at IS NULL',
+        [req.params.id]
+      );
+      await pool.query('DELETE FROM admin_sessions WHERE employee_id = $1', [req.params.id]);
+    } catch {
+      /* pre-migration tables may not exist */
+    }
+    await audit(req.admin.id, `reset-password:${req.params.id}`, req.ip);
+    // Returned once: show it in the invite card, then it is unrecoverable.
+    return res.json({ tempPassword: temp });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.get('/audit', requireAdmin, async (req, res, next) => {
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+    const { rows } = await pool.query(
+      `SELECT id, employee_id, action, ip, created_at FROM auth_audit_log
+        ORDER BY id DESC LIMIT $1`,
+      [limit]
+    );
+    return res.json(rows);
+  } catch (err) {
+    if (err.code === '42P01') return res.json([]);
     return next(err);
   }
 });

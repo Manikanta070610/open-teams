@@ -1,8 +1,14 @@
-// Token lives in module memory only (never localStorage): it dies with the tab.
+// Access (JWE) token lives in module memory only (never localStorage): it dies
+// with the tab. The long-lived refresh token lives in an HttpOnly cookie that
+// the browser sends automatically — hence `credentials: 'include'` below.
 let token = null;
 
 export function setToken(t) {
   token = t;
+}
+
+export function getToken() {
+  return token;
 }
 
 export async function api(path, { method = 'GET', body, signal } = {}) {
@@ -14,6 +20,7 @@ export async function api(path, { method = 'GET', body, signal } = {}) {
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
+    credentials: 'include',
   });
   if (res.status === 204) return null;
   let data = null;

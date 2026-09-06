@@ -3,6 +3,7 @@ import express from 'express';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import adminRouter from './admin.js';
+import authRouter, { requireAuth } from './auth.js';
 import { pool } from './db.js';
 
 const app = express();
@@ -10,6 +11,7 @@ app.use(express.json());
 // Single proxy hop (Render) so req.ip is the real client for login rate limiting.
 app.set('trust proxy', 1);
 
+app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 
 app.get('/health', async (_req, res) => {
@@ -21,7 +23,7 @@ app.get('/health', async (_req, res) => {
   }
 });
 
-app.get('/api/employees', async (_req, res) => {
+app.get('/api/employees', requireAuth, async (_req, res) => {
   try {
     const { rows } = await pool.query(
       'SELECT id, first_name, last_name, email, rank FROM employees WHERE is_active = TRUE ORDER BY id LIMIT 50'
