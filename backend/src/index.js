@@ -4,6 +4,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import adminRouter from './admin.js';
 import authRouter, { requireAuth } from './auth.js';
+import dashboardRouter from './dashboard.js';
+import projectRouter from './projects.js';
 import workspaceRouter from './workspaces.js';
 import { pool } from './db.js';
 
@@ -24,8 +26,11 @@ app.use((_req, res, next) => {
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/workspaces', workspaceRouter);
+app.use('/api/projects', projectRouter);
+app.use('/api/dashboard', dashboardRouter);
 // Alias for spec compat: POST /workspaces, GET /workspaces, GET /workspaces/:id
 app.use('/workspaces', workspaceRouter);
+app.use('/projects', projectRouter);
 
 app.get('/health', async (_req, res) => {
   try {

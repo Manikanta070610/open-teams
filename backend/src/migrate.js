@@ -19,6 +19,7 @@ const FILES = [
   'db/09_admin.sql',
   'db/10_employee_auth.sql',
   'db/11_workspaces.sql',
+  'db/12_project_staffing.sql',
 ];
 
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL });

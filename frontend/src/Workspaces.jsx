@@ -90,6 +90,20 @@ export default function Workspaces() {
     }
   }
 
+  async function promote(empId, role) {
+    if (!selected) return;
+    setErr('');
+    try {
+      setSelected(await api(`/api/workspaces/${selected.id}/members/${empId}`, { method: 'PATCH', body: { role } }));
+    } catch (e2) {
+      if (e2.status === 401) sessionExpired(policyDays);
+      else setErr(e2.message);
+    }
+  }
+
+  const myWsRole = selected?.members?.find((m) => Number(m.employee_id) === Number(user?.id))?.role;
+  const canPromote = !!user && (myWsRole === 'owner' || Number(user.rank) >= 5 || user.isAdmin);
+
   return (
     <section>
       <h2>Workspaces</h2>
@@ -133,7 +147,19 @@ export default function Workspaces() {
               {(selected.members || []).map((m) => (
                 <li key={m.employee_id}>
                   {m.first_name} {m.last_name} — {m.role}
+                  {(m.role === 'owner' || m.role === 'lead') && <strong> [HEAD]</strong>}
                   {m.allocation_pct < 100 ? ` (${m.allocation_pct}%${m.is_primary ? '' : ', shared'})` : ' (full-time)'}
+                  {canPromote && (
+                    <>
+                      {' '}
+                      <select value={m.role} onChange={(e) => promote(m.employee_id, e.target.value)} title="Head = owner/lead (any rank)">
+                        <option value="owner">owner</option>
+                        <option value="lead">lead</option>
+                        <option value="member">member</option>
+                        <option value="viewer">viewer</option>
+                      </select>
+                    </>
+                  )}
                 </li>
               ))}
             </ul>

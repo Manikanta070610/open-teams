@@ -4,6 +4,8 @@ import { AuthProvider, useAuth } from './AuthContext.jsx';
 import Login from './Login.jsx';
 import ChangePassword from './ChangePassword.jsx';
 import AdminPanel from './AdminPanel.jsx';
+import Dashboard from './Dashboard.jsx';
+import Projects from './Projects.jsx';
 import Workspaces from './Workspaces.jsx';
 
 function Directory() {
@@ -56,7 +58,7 @@ function Directory() {
 
 function Shell() {
   const { status, user, mustChange, logout } = useAuth();
-  const [view, setView] = useState('directory');
+  const [view, setView] = useState('dashboard');
 
   if (status === 'checking') return <main style={{ fontFamily: 'system-ui', padding: 24 }}><p>Signing you back in…</p></main>;
   if (status === 'anon') {
@@ -80,13 +82,25 @@ function Shell() {
     <main style={{ fontFamily: 'system-ui', padding: 24 }}>
       <h1>Office Management System</h1>
       <p>
+        <button disabled={view === 'dashboard'} onClick={() => setView('dashboard')}>My work</button>{' '}
         <button disabled={view === 'directory'} onClick={() => setView('directory')}>Directory</button>{' '}
+        <button disabled={view === 'projects'} onClick={() => setView('projects')}>Projects</button>{' '}
         <button disabled={view === 'workspaces'} onClick={() => setView('workspaces')}>Workspaces</button>{' '}
         {user.isAdmin && (
           <button disabled={view === 'admin'} onClick={() => setView('admin')}>Admin</button>
         )}
       </p>
-      {view === 'admin' && user.isAdmin ? <AdminPanel /> : view === 'workspaces' ? <Workspaces /> : <Directory />}
+      {view === 'admin' && user.isAdmin ? (
+        <AdminPanel />
+      ) : view === 'projects' ? (
+        <Projects />
+      ) : view === 'workspaces' ? (
+        <Workspaces />
+      ) : view === 'directory' ? (
+        <Directory />
+      ) : (
+        <Dashboard />
+      )}
     </main>
   );
 }

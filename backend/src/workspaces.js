@@ -278,4 +278,80 @@ router.patch('/:wid/staff-requests/:rid', async (req, res, next) => {
   }
 });
 
+// --- PATCH /:id — edit name/description/status (heads: owner|lead, or chief/admin) ---
+router.patch('/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'invalid id' });
+    const ws = await pool.query('SELECT id FROM workspaces WHERE id = $1', [id]);
+    if (ws.rows.length === 0) return res.status(404).json({ error: 'not found' });
+    const mem = await pool.query(
+      'SELECT role FROM workspace_members WHERE workspace_id = $1 AND employee_id = $2',
+      [id, req.user.id]
+    );
+    const myRole = mem.rows[0]?.role;
+    if (!((myRole === 'owner' || myRole === 'lead') || isChiefOrAdmin(req.user))) {
+      return res.status(403).json({ error: 'workspace heads only' });
+    }
+    const patch = {};
+    if (req.body?.name !== undefined) {
+      const n = String(req.body.name).trim();
+      if (!n) return res.status(400).json({ error: 'name is required' });
+      patch.name = n.slice(0, 200);
+    }
+    if (req.body?.description !== undefined) {
+      patch.description = req.body.description ? String(req.body.description).slice(0, 2000) : null;
+    }
+    if (req.body?.status !== undefined) {
+      const s = String(req.body.status);
+      if (!['planned', 'active', 'archived'].includes(s)) return res.status(400).json({ error: 'invalid status' });
+      patch.status = s;
+    }
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'nothing to update' });
+    try {
+      const cols = Object.keys(patch);
+      await pool.query(`UPDATE workspaces SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(', ')} WHERE id = $1`, [id, ...Object.values(patch)]);
+    } catch (err) {
+      if (err.code === '23505') return res.status(409).json({ error: 'workspace name already exists' });
+      throw err;
+    }
+    return res.json(await workspaceDetail(id));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// --- PATCH /:id/members/:empId — promote/demote any member (workspace owner or chief/admin) ---
+// Heads (owner|lead) can be anyone — designated here, not rank-gated.
+router.patch('/:id/members/:empId', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const empId = Number(req.params.empId);
+    if (!Number.isInteger(id) || !Number.isInteger(empId)) return res.status(400).json({ error: 'invalid id' });
+    const ws = await pool.query('SELECT id FROM workspaces WHERE id = $1', [id]);
+    if (ws.rows.length === 0) return res.status(404).json({ error: 'not found' });
+    const me = await pool.query(
+      'SELECT role FROM workspace_members WHERE workspace_id = $1 AND employee_id = $2',
+      [id, req.user.id]
+    );
+    if (!(me.rows[0]?.role === 'owner' || isChiefOrAdmin(req.user))) {
+      return res.status(403).json({ error: 'workspace owner or chief only' });
+    }
+    const role = String(req.body?.role || '');
+    if (!ROLES.has(role)) return res.status(400).json({ error: 'invalid role' });
+    const target = await pool.query(
+      'SELECT role FROM workspace_members WHERE workspace_id = $1 AND employee_id = $2',
+      [id, empId]
+    );
+    if (target.rows.length === 0) return res.status(404).json({ error: 'not found' });
+    await pool.query(
+      'UPDATE workspace_members SET role = $1 WHERE workspace_id = $2 AND employee_id = $3',
+      [role, id, empId]
+    );
+    return res.json(await workspaceDetail(id));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 export default router;
