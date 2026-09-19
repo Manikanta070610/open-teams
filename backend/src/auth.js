@@ -54,10 +54,10 @@ function setRefreshCookie(res, req, token, maxAgeSec) {
 }
 
 function clearRefreshCookie(res, req) {
-  res.append(
-    'Set-Cookie',
-    `${REFRESH_COOKIE}=; Path=/api/auth; HttpOnly; SameSite=Lax; Max-Age=0`
-  );
+  // Same flags as set (incl. conditional Secure): some browsers will not
+  // overwrite — and thus not delete — a Secure cookie from a non-Secure
+  // deletion response.
+  res.append('Set-Cookie', `${REFRESH_COOKIE}=; ${cookieFlags(req, 0)}`);
 }
 
 function isEligibleAdmin(row) {

@@ -7,7 +7,7 @@ on:
 
 jobs:
   db-schema:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:15
@@ -23,11 +23,13 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      # Glob keeps this in sync as migrations are added (lexical = numeric order).
       - name: Apply schema in order
         env:
           PGPASSWORD: postgres
         run: |
-          for f in db/01_core.sql db/02_projects.sql db/03_hr.sql db/04_collab_chat.sql db/05_triggers.sql db/06_indexes.sql db/07_seed.sql db/08_dept_governance.sql db/09_admin.sql db/10_employee_auth.sql db/11_workspaces.sql; do
+          for f in db/*.sql; do
+            echo "== $f"
             psql -h localhost -U postgres -d office_mgmt_final -v ON_ERROR_STOP=1 -q -f "$f"
           done
       - name: Seed count check
@@ -37,7 +39,7 @@ jobs:
           psql -h localhost -U postgres -d office_mgmt_final -c "SELECT count(*) FROM employees;" -t | grep -q 7
 
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:15
@@ -60,20 +62,22 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: backend/package.json
-      - run: npm install
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
       - name: Apply schema (for API tests)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/office_mgmt_final
           SETUP_TOKEN: ci-setup-token
+          AUTH_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
         run: npm run migrate
       - run: npm test
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/office_mgmt_final
           SETUP_TOKEN: ci-setup-token
+          AUTH_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: frontend
@@ -83,6 +87,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: frontend/package.json
-      - run: npm install
+          cache-dependency-path: frontend/package-lock.json
+      # npm ci (not install) so peer conflicts like vite vs @vitejs/plugin-react
+      # fail here loudly instead of shipping a half-working bundle.
+      - run: npm ci
       - run: npm run build
+      - run: npm run build:admin
+      - name: Bundle split check (no admin code in public bundle and vice versa)
+        run: |
+          test -f dist/index.html
+          test -f dist-admin/admin.html
+          ! grep -rq "AdminPanel" dist/assets/*.js
+          ! grep -rq "ProjectChat" dist-admin/assets/*.js

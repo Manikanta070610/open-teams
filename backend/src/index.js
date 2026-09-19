@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import adminRouter from './admin.js';
 import authRouter, { requireAuth } from './auth.js';
+import chatRouter from './chat.js';
 import dashboardRouter from './dashboard.js';
 import projectRouter from './projects.js';
 import workspaceRouter from './workspaces.js';
@@ -16,10 +17,15 @@ app.use(express.json({ limit: '100kb' }));
 app.set('trust proxy', 1);
 
 // Minimal security headers (no extra deps): API serves JSON only, never HTML.
-app.use((_req, res, next) => {
+// HSTS is sent only when the request already came over HTTPS (direct or via
+// a TLS-terminating proxy), so plain-HTTP local/dev setups keep working.
+app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('X-Frame-Options', 'DENY');
   res.set('Referrer-Policy', 'no-referrer');
+  if (req.secure || String(req.get('x-forwarded-proto') || '').split(',')[0].trim() === 'https') {
+    res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   next();
 });
 
@@ -64,15 +70,19 @@ if (!isAdminService) {
   app.use('/api/workspaces', workspaceRouter);
   app.use('/api/projects', projectRouter);
   app.use('/api/dashboard', dashboardRouter);
+  app.use('/api/chat', chatRouter);
   // Alias for spec compat: POST /workspaces, GET /workspaces, GET /workspaces/:id
   app.use('/workspaces', workspaceRouter);
   app.use('/projects', projectRouter);
+  app.use('/chat', chatRouter);
 } else {
   app.use('/api/workspaces', notFound);
   app.use('/api/projects', notFound);
   app.use('/api/dashboard', notFound);
+  app.use('/api/chat', notFound);
   app.use('/workspaces', notFound);
   app.use('/projects', notFound);
+  app.use('/chat', notFound);
 }
 
 app.get('/health', async (_req, res) => {

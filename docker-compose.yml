@@ -1,0 +1,96 @@
+# Full-stack local/production run: Postgres + public API + admin API +
+# employee portal + back-office. Secrets live in the root .env file
+# (see .env.example; generate it with ./setup.sh --docker).
+#
+# First boot:  docker compose up -d db && docker compose run --rm migrate
+# Then:        docker compose up -d
+# URLs: portal http://localhost:8080, back-office http://localhost:8081
+name: open-teams
+
+services:
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-office_mgmt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-office_mgmt_final}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-office_mgmt}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot schema + seed. Rerunnable-safe files only — run explicitly,
+  # NOT on every `up`, because 01..06 use plain CREATE TABLE.
+  migrate:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-office_mgmt}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-office_mgmt_final}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["npm", "run", "migrate"]
+
+  backend-public:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      ADMIN_MODE: public
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-office_mgmt}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-office_mgmt_final}
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${PUBLIC_API_PORT:-4000}:4000"
+
+  backend-admin:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      ADMIN_MODE: admin
+      PORT: 4001
+      ADMIN_PORT: 4001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-office_mgmt}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-office_mgmt_final}
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${ADMIN_API_PORT:-4001}:4001"
+
+  frontend-public:
+    build:
+      context: ./frontend
+      args:
+        VITE_APP_TARGET: public
+        BACKEND_URL: http://backend-public:4000
+        ENTRY_FILE: index.html
+    restart: unless-stopped
+    depends_on:
+      - backend-public
+    ports:
+      - "${PORTAL_PORT:-8080}:80"
+
+  frontend-admin:
+    build:
+      context: ./frontend
+      args:
+        VITE_APP_TARGET: admin
+        BACKEND_URL: http://backend-admin:4001
+        ENTRY_FILE: admin.html
+    restart: unless-stopped
+    depends_on:
+      - backend-admin
+    ports:
+      - "${ADMIN_PORTAL_PORT:-8081}:80"
+
+volumes:
+  pgdata:

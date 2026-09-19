@@ -754,29 +754,60 @@ router.get('/:id/threads', async (req, res, next) => {
       return res.status(404).json({ error: 'not found' });
     }
     const { rows: threads } = await pool.query(
-      `SELECT t.* FROM project_chat_threads t
+      `SELECT t.*,
+              lm.id AS lm_id, lm.sender_id AS lm_sender, lm.body AS lm_body,
+              lm.created_at AS lm_at, le.first_name AS lm_first, le.last_name AS lm_last,
+              (SELECT COUNT(*)::int FROM project_chat_messages m
+                WHERE m.thread_id = t.id AND m.is_deleted = FALSE) AS message_count
+         FROM project_chat_threads t
          JOIN project_chat_thread_members tm
            ON tm.thread_id = t.id AND tm.employee_id = $2
+         LEFT JOIN LATERAL (
+           SELECT m.* FROM project_chat_messages m
+            WHERE m.thread_id = t.id AND m.is_deleted = FALSE
+            ORDER BY m.id DESC LIMIT 1
+         ) lm ON TRUE
+         LEFT JOIN employees le ON le.id = lm.sender_id
         WHERE t.project_id = $1 AND t.type IN ('direct','group')
         ORDER BY t.id DESC`,
       [id, req.user.id]
     );
-    const out = [];
-    for (const t of threads) {
-      const members = await threadMembers(t.id);
-      const { rows: last } = await pool.query(
-        `SELECT m.*, e.first_name, e.last_name FROM project_chat_messages m
-           JOIN employees e ON e.id = m.sender_id
-          WHERE m.thread_id = $1 AND m.is_deleted = FALSE
-          ORDER BY m.id DESC LIMIT 1`,
-        [t.id]
+    const ids = threads.map((t) => Number(t.id));
+    let mems = [];
+    if (ids.length > 0) {
+      const { rows } = await pool.query(
+        `SELECT tm.thread_id, tm.employee_id AS id,
+                e.first_name, e.last_name, e.email
+           FROM project_chat_thread_members tm
+           JOIN employees e ON e.id = tm.employee_id
+          WHERE tm.thread_id = ANY($1::bigint[])
+          ORDER BY e.first_name, e.last_name`,
+        [ids]
       );
-      const { rows: cnt } = await pool.query(
-        `SELECT COUNT(*)::int AS n FROM project_chat_messages WHERE thread_id = $1 AND is_deleted = FALSE`,
-        [t.id]
-      );
-      out.push({ ...t, members, last_message: last[0] || null, message_count: cnt[0].n });
+      mems = rows;
     }
+    const memsByThread = new Map();
+    for (const mm of mems) {
+      const k = Number(mm.thread_id);
+      if (!memsByThread.has(k)) memsByThread.set(k, []);
+      const { thread_id: _drop, ...rest } = mm;
+      memsByThread.get(k).push(rest);
+    }
+    const out = threads.map((t) => {
+      const { lm_id, lm_sender, lm_body, lm_at, lm_first, lm_last, ...rest } = t;
+      return {
+        ...rest,
+        members: memsByThread.get(Number(t.id)) || [],
+        last_message: lm_id ? {
+          id: lm_id,
+          sender_id: lm_sender,
+          body: lm_body,
+          created_at: lm_at,
+          first_name: lm_first,
+          last_name: lm_last,
+        } : null,
+      };
+    });
     return res.json(out);
   } catch (err) { return next(err); }
 });

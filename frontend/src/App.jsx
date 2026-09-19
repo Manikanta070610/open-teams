@@ -6,6 +6,7 @@ import ChangePassword from './ChangePassword.jsx';
 import Dashboard from './Dashboard.jsx';
 import Projects from './Projects.jsx';
 import Workspaces from './Workspaces.jsx';
+import Chat from './Chat.jsx';
 import { Avatar, Badge, Card } from './ui.jsx';
 
 // Public employee app: no admin imports. AdminPanel lives only in the
@@ -15,6 +16,7 @@ const NAV = [
   { id: 'dashboard', label: 'My work' },
   { id: 'projects', label: 'Projects' },
   { id: 'workspaces', label: 'Workspaces' },
+  { id: 'chat', label: 'Chat' },
   { id: 'directory', label: 'Directory' },
 ];
 
@@ -154,6 +156,8 @@ function Shell() {
           <Projects />
         ) : view === 'workspaces' ? (
           <Workspaces />
+        ) : view === 'chat' ? (
+          <Chat />
         ) : view === 'directory' ? (
           <Directory />
         ) : (

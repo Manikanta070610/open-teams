@@ -12,6 +12,7 @@ import { Router } from 'express';
 import { hashPassword, newToken, setupTokenMatches, sha256hex, verifyPassword } from './crypto.js';
 import { pool } from './db.js';
 import { _resetRateLimits } from './ratelimit.js';
+import { rateLimited } from './ratelimit.js';
 import {
   audit,
   getInactivityDays,
@@ -128,6 +129,12 @@ function tempPassword() {
 // --- first-time credential creation, guarded by one-time SETUP_TOKEN ---
 router.post('/bootstrap', async (req, res, next) => {
   try {
+    // Unauthenticated surface: strict per-IP cap so the setup token
+    // cannot be brute-forced online (constant-time compare below only
+    // stops timing leaks, not guessing).
+    if (rateLimited('admin-bootstrap', req.ip, 10, LOGIN_WINDOW_MS)) {
+      return res.status(429).json({ error: 'too many attempts, try later' });
+    }
     const setupToken = process.env.SETUP_TOKEN;
     if (!setupToken) return res.status(403).json({ error: 'bootstrap disabled' });
     const { email, password, setupToken: provided, restrictAdminByIp, adminAllowedIps } =

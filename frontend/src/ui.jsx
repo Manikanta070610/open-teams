@@ -47,11 +47,3 @@ export function Stat({ num, label }) {
 export function Empty({ children }) {
   return <p className="muted">{children}</p>;
 }
-
-export function RoleBadge({ role }) {
-  return <Badge kind={role}>{role}</Badge>;
-}
-
-export function RankBadge({ rank }) {
-  return <Badge kind="rank">R{rank}</Badge>;
-}

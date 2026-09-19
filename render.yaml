@@ -3,7 +3,7 @@
 # admin frontend. The admin services are the back office: do not publish
 # their URLs to employees.
 # Deploy: push to GitHub, then Render Dashboard > New > Blueprint > select repo.
-# DB schema is applied pre-deploy via `npm --prefix backend run migrate` (01..12 in order).
+# DB schema is applied pre-deploy via `npm --prefix backend run migrate` (01..13 in order).
 databases:
   - name: office-mgmt-db
     plan: free
