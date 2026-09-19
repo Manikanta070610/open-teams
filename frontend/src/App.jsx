@@ -3,15 +3,25 @@ import { api } from './adminApi.js';
 import { AuthProvider, useAuth } from './AuthContext.jsx';
 import Login from './Login.jsx';
 import ChangePassword from './ChangePassword.jsx';
-import AdminPanel from './AdminPanel.jsx';
 import Dashboard from './Dashboard.jsx';
 import Projects from './Projects.jsx';
 import Workspaces from './Workspaces.jsx';
+import { Avatar, Badge, Card } from './ui.jsx';
+
+// Public employee app: no admin imports. AdminPanel lives only in the
+// admin bundle (AdminApp.jsx served on the admin port).
+
+const NAV = [
+  { id: 'dashboard', label: 'My work' },
+  { id: 'projects', label: 'Projects' },
+  { id: 'workspaces', label: 'Workspaces' },
+  { id: 'directory', label: 'Directory' },
+];
 
 function Directory() {
   const [health, setHealth] = useState('checking...');
   const [employees, setEmployees] = useState([]);
-  const { user, logout, sessionExpired, policyDays } = useAuth();
+  const { sessionExpired, policyDays } = useAuth();
 
   useEffect(() => {
     const c = new AbortController();
@@ -31,27 +41,40 @@ function Directory() {
 
   return (
     <>
-      <p>
-        Signed in as <strong>{user.email}</strong> (rank {user.rank}, {user.dept_name})
-        {user.isAdmin ? ' — admin' : ''}.{' '}
-        <button onClick={() => logout(false)}>Log out</button>{' '}
-        <button onClick={() => logout(true)} title="Revoke all devices">Log out everywhere</button>
-      </p>
-      <p>Backend: {health}</p>
-      <h2>Employees</h2>
-      {employees.length === 0 ? (
-        <p>No data (backend not running or empty).</p>
-      ) : (
-        <ul>
-          {employees.map((e) => (
-            <li key={e.id}>
-              {e.first_name} {e.last_name} — {e.email} (rank {e.rank})
-            </li>
-          ))}
-        </ul>
-      )}
-      <h3>My account</h3>
-      <ChangePassword forced={false} />
+      <div className="page-head">
+        <h1>Directory</h1>
+        <p className="page-sub">
+          Everyone in the company · backend: {health}
+        </p>
+      </div>
+      <Card title={`Employees (${employees.length})`}>
+        {employees.length === 0 ? (
+          <p className="muted">No data (backend not running or empty).</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="grid-table">
+              <thead><tr><th>Name</th><th>Email</th><th>Rank</th></tr></thead>
+              <tbody>
+                {employees.map((e) => (
+                  <tr key={e.id}>
+                    <td>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+                        <Avatar first={e.first_name} last={e.last_name} />
+                        <strong>{e.first_name} {e.last_name}</strong>
+                      </span>
+                    </td>
+                    <td className="muted">{e.email}</td>
+                    <td><Badge kind="rank">R{e.rank}</Badge></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      <Card title="My account">
+        <ChangePassword forced={false} />
+      </Card>
     </>
   );
 }
@@ -60,48 +83,84 @@ function Shell() {
   const { status, user, mustChange, logout } = useAuth();
   const [view, setView] = useState('dashboard');
 
-  if (status === 'checking') return <main style={{ fontFamily: 'system-ui', padding: 24 }}><p>Signing you back in…</p></main>;
+  if (status === 'checking') {
+    return (
+      <div className="auth-page">
+        <div className="auth-card"><p className="loading">Signing you back in</p></div>
+      </div>
+    );
+  }
   if (status === 'anon') {
     return (
-      <main style={{ fontFamily: 'system-ui', padding: 24 }}>
-        <h1>Office Management System</h1>
-        <Login />
-      </main>
+      <div className="auth-page">
+        <div>
+          <div className="auth-card">
+            <div className="auth-brand">Office HQ</div>
+            <p className="auth-sub">Employee portal — sign in to get to work.</p>
+            <Login />
+          </div>
+        </div>
+      </div>
     );
   }
   if (mustChange) {
     return (
-      <main style={{ fontFamily: 'system-ui', padding: 24 }}>
-        <h1>Office Management System</h1>
-        <p>Signed in as <strong>{user.email}</strong>. <button onClick={() => logout(false)}>Log out</button></p>
-        <ChangePassword forced />
-      </main>
+      <div className="auth-page">
+        <div className="auth-card">
+          <div className="auth-brand">Office HQ</div>
+          <p className="auth-sub">
+            Signed in as <strong>{user.email}</strong>.{' '}
+            <button className="link-btn" onClick={() => logout(false)}>Log out</button>
+          </p>
+          <ChangePassword forced />
+        </div>
+      </div>
     );
   }
   return (
-    <main style={{ fontFamily: 'system-ui', padding: 24 }}>
-      <h1>Office Management System</h1>
-      <p>
-        <button disabled={view === 'dashboard'} onClick={() => setView('dashboard')}>My work</button>{' '}
-        <button disabled={view === 'directory'} onClick={() => setView('directory')}>Directory</button>{' '}
-        <button disabled={view === 'projects'} onClick={() => setView('projects')}>Projects</button>{' '}
-        <button disabled={view === 'workspaces'} onClick={() => setView('workspaces')}>Workspaces</button>{' '}
-        {user.isAdmin && (
-          <button disabled={view === 'admin'} onClick={() => setView('admin')}>Admin</button>
+    <div className="app">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-name">Office HQ</div>
+          <div className="brand-sub">Employee portal</div>
+        </div>
+        <nav className="nav">
+          {NAV.map((n) => (
+            <button
+              key={n.id}
+              className={view === n.id ? 'nav-btn active' : 'nav-btn'}
+              onClick={() => setView(n.id)}
+            >
+              {n.label}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-foot">
+          <div className="user-chip">
+            <Avatar first={user.email} last="" />
+            <div className="user-meta">
+              <div className="user-email">{user.email}</div>
+              <div className="user-sub">Rank {user.rank} · {user.dept_name}</div>
+            </div>
+          </div>
+          <div className="btn-row">
+            <button className="btn btn-sm" style={{ color: '#fff', borderColor: 'rgba(255,255,255,.3)', background: 'transparent' }} onClick={() => logout(false)}>Log out</button>
+            <button className="btn btn-sm" style={{ color: '#fff', borderColor: 'rgba(255,255,255,.3)', background: 'transparent' }} onClick={() => logout(true)} title="Revoke all devices">Everywhere</button>
+          </div>
+        </div>
+      </aside>
+      <main className="main">
+        {view === 'projects' ? (
+          <Projects />
+        ) : view === 'workspaces' ? (
+          <Workspaces />
+        ) : view === 'directory' ? (
+          <Directory />
+        ) : (
+          <Dashboard />
         )}
-      </p>
-      {view === 'admin' && user.isAdmin ? (
-        <AdminPanel />
-      ) : view === 'projects' ? (
-        <Projects />
-      ) : view === 'workspaces' ? (
-        <Workspaces />
-      ) : view === 'directory' ? (
-        <Directory />
-      ) : (
-        <Dashboard />
-      )}
-    </main>
+      </main>
+    </div>
   );
 }
 

@@ -1,24 +1,20 @@
 import { useEffect, useState } from 'react';
 import { api } from './adminApi.js';
 import { useAuth } from './AuthContext.jsx';
+import { Alert, Avatar, Badge, Card, Empty, Stat } from './ui.jsx';
 
 const TABS = ['Overview', 'Employees', 'Domains', 'Access', 'Security'];
-
-function Err({ msg }) {
-  if (!msg) return null;
-  return <p style={{ color: 'darkred' }}>Error: {msg}</p>;
-}
 
 function InviteCard({ invite, onClose }) {
   if (!invite) return null;
   return (
-    <div style={{ border: '2px solid green', padding: 8, margin: '8px 0' }}>
+    <div className="invite-box">
       <strong>Login created — share once, then it’s unrecoverable:</strong>
       <br />Company email: <code>{invite.email}</code>
       <br />Temporary password: <code>{invite.tempPassword}</code>
       <br />
-      <small>Send these to the employee’s personal email. They must set a new password on first login.</small>{' '}
-      <button onClick={onClose}>Dismiss</button>
+      <small className="muted">Send these to the employee’s personal email. They must set a new password on first login.</small>{' '}
+      <button className="btn btn-sm" onClick={onClose}>Dismiss</button>
     </div>
   );
 }
@@ -35,26 +31,28 @@ function Overview() {
       });
     return () => c.abort();
   }, []);
-  if (!data) return <section><Err msg={err} /><p>Loading…</p></section>;
+  if (!data) return <section>{err && <Alert>{err}</Alert>}<p className="loading">Loading</p></section>;
   return (
     <section>
-      <h2>Overview</h2>
-      <ul>
-        <li>Employees: {data.totals.active} active / {data.totals.employees} total</li>
-        <li>Allowed email domains: {data.totals.domains}</li>
-        <li>Open HR tickets: {data.totals.open_tickets}</li>
-        <li>Active projects: {data.totals.active_projects}</li>
-      </ul>
-      <h3>Headcount by department</h3>
-      <table border="1" cellPadding="4">
-        <thead><tr><th>Department</th><th>Active</th></tr></thead>
-        <tbody>
-          {data.byDepartment.map((d) => (
-            <tr key={d.department}><td>{d.department}</td><td>{d.headcount}</td></tr>
-          ))}
-        </tbody>
-      </table>
-      <Err msg={err} />
+      <div className="grid stats">
+        <Stat num={`${data.totals.active} / ${data.totals.employees}`} label="Active / total staff" />
+        <Stat num={data.totals.domains} label="Email domains" />
+        <Stat num={data.totals.open_tickets} label="Open HR tickets" />
+        <Stat num={data.totals.active_projects} label="Active projects" />
+      </div>
+      <Card title="Headcount by department">
+        <div className="table-wrap">
+          <table className="grid-table">
+            <thead><tr><th>Department</th><th>Active</th></tr></thead>
+            <tbody>
+              {data.byDepartment.map((d) => (
+                <tr key={d.department}><td><strong>{d.department}</strong></td><td>{d.headcount}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      {err && <Alert>{err}</Alert>}
     </section>
   );
 }
@@ -127,62 +125,89 @@ function Employees() {
 
   return (
     <section>
-      <h2>Employees</h2>
-      <form onSubmit={search}>
-        <input placeholder="search email / last name" value={q} onChange={(e) => setQ(e.target.value)} />
-        <button type="submit">Search</button>
-      </form>
-      <Err msg={err} />
-      <table border="1" cellPadding="4">
-        <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Rank</th><th>Dept</th><th>Active</th><th></th></tr></thead>
-        <tbody>
-          {list.rows.map((r) => (
-            <tr key={r.id}>
-              <td>{r.id}</td>
-              <td>{editing === r.id ? (
-                <>
-                  <input size="8" defaultValue={r.first_name} onChange={(e) => setForm((f) => ({ ...f, first_name: e.target.value }))} />
-                  <input size="8" defaultValue={r.last_name} onChange={(e) => setForm((f) => ({ ...f, last_name: e.target.value }))} />
-                </>
-              ) : `${r.first_name} ${r.last_name}`}</td>
-              <td>{r.email}</td>
-              <td>{editing === r.id ? (
-                <select defaultValue={r.rank} onChange={(e) => setForm((f) => ({ ...f, rank: Number(e.target.value) }))}>
-                  {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
-                </select>
-              ) : r.rank}</td>
-              <td>{editing === r.id ? (
-                <select defaultValue={r.department_id} onChange={(e) => setForm((f) => ({ ...f, department_id: Number(e.target.value) }))}>
-                  {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
-              ) : r.department}</td>
-              <td>{r.is_active ? 'yes' : 'no'}</td>
-              <td>{editing === r.id ? (
-                <><button onClick={() => save(r.id)}>Save</button> <button onClick={() => setEditing(null)}>Cancel</button></>
-              ) : <button onClick={() => { setEditing(r.id); setForm({}); }}>Edit</button>}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p>Total {list.total}. Page {page}. <button disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</button> <button onClick={() => setPage(page + 1)}>Next</button></p>
-      <h3>Add employee</h3>
-      <p style={{ color: '#555' }}>Company email is the login. The initial password is shown once below — send it to their personal email; they must change it on first login.</p>
-      <InviteCard invite={invite} onClose={() => setInvite(null)} />
-      <form onSubmit={create}>
-        <input placeholder="first" value={creating.first_name} onChange={(e) => setCreating({ ...creating, first_name: e.target.value })} />
-        <input placeholder="last" value={creating.last_name} onChange={(e) => setCreating({ ...creating, last_name: e.target.value })} />
-        <input placeholder="company email" value={creating.email} onChange={(e) => setCreating({ ...creating, email: e.target.value })} />
-        <input placeholder="personal email (invite goes here)" value={creating.contact_email} onChange={(e) => setCreating({ ...creating, contact_email: e.target.value })} />
-        <input placeholder="initial password (min 8)" type="password" value={creating.password} onChange={(e) => setCreating({ ...creating, password: e.target.value })} />
-        <select value={creating.rank} onChange={(e) => setCreating({ ...creating, rank: e.target.value })}>
-          {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>rank {n}</option>)}
-        </select>
-        <select value={creating.department_id} onChange={(e) => setCreating({ ...creating, department_id: e.target.value })}>
-          <option value="">department…</option>
-          {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
-        <button type="submit">Add</button>
-      </form>
+      <Card title="Employees">
+        <form onSubmit={search}>
+          <div className="form-inline">
+            <div className="field" style={{ flex: 1, minWidth: 200 }}>
+              <span>Search email / last name</span>
+              <input value={q} onChange={(e) => setQ(e.target.value)} />
+            </div>
+            <button className="btn btn-primary" type="submit">Search</button>
+          </div>
+        </form>
+        {err && <Alert>{err}</Alert>}
+        <div className="table-wrap" style={{ marginTop: 12 }}>
+          <table className="grid-table">
+            <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Rank</th><th>Dept</th><th>Active</th><th></th></tr></thead>
+            <tbody>
+              {list.rows.map((r) => (
+                <tr key={r.id}>
+                  <td className="muted">{r.id}</td>
+                  <td>{editing === r.id ? (
+                    <span style={{ display: 'inline-flex', gap: 6 }}>
+                      <input size="8" defaultValue={r.first_name} onChange={(e) => setForm((f) => ({ ...f, first_name: e.target.value }))} />
+                      <input size="8" defaultValue={r.last_name} onChange={(e) => setForm((f) => ({ ...f, last_name: e.target.value }))} />
+                    </span>
+                  ) : (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <Avatar first={r.first_name} last={r.last_name} />
+                      <strong>{r.first_name} {r.last_name}</strong>
+                    </span>
+                  )}</td>
+                  <td className="muted">{r.email}</td>
+                  <td>{editing === r.id ? (
+                    <select defaultValue={r.rank} onChange={(e) => setForm((f) => ({ ...f, rank: Number(e.target.value) }))}>
+                      {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  ) : <Badge kind="rank">R{r.rank}</Badge>}</td>
+                  <td>{editing === r.id ? (
+                    <select defaultValue={r.department_id} onChange={(e) => setForm((f) => ({ ...f, department_id: Number(e.target.value) }))}>
+                      {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                  ) : r.department}</td>
+                  <td>{r.is_active ? <Badge kind="done">yes</Badge> : <Badge kind="blocked">no</Badge>}</td>
+                  <td>{editing === r.id ? (
+                    <span className="btn-row">
+                      <button className="btn btn-sm btn-primary" onClick={() => save(r.id)}>Save</button>
+                      <button className="btn btn-sm" onClick={() => setEditing(null)}>Cancel</button>
+                    </span>
+                  ) : <button className="btn btn-sm" onClick={() => { setEditing(r.id); setForm({}); }}>Edit</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="muted" style={{ marginTop: 10 }}>
+          Total {list.total} · Page {page}{' '}
+          <button className="btn btn-sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</button>{' '}
+          <button className="btn btn-sm" onClick={() => setPage(page + 1)}>Next</button>
+        </p>
+      </Card>
+      <Card title="Add employee">
+        <p className="muted">Company email is the login. The initial password is shown once below — send it to their personal email; they must change it on first login.</p>
+        <InviteCard invite={invite} onClose={() => setInvite(null)} />
+        <form onSubmit={create}>
+          <div className="form-inline">
+            <div className="field"><span>First</span><input value={creating.first_name} onChange={(e) => setCreating({ ...creating, first_name: e.target.value })} /></div>
+            <div className="field"><span>Last</span><input value={creating.last_name} onChange={(e) => setCreating({ ...creating, last_name: e.target.value })} /></div>
+            <div className="field"><span>Company email</span><input value={creating.email} onChange={(e) => setCreating({ ...creating, email: e.target.value })} /></div>
+            <div className="field"><span>Personal email (invite)</span><input value={creating.contact_email} onChange={(e) => setCreating({ ...creating, contact_email: e.target.value })} /></div>
+            <div className="field"><span>Initial password (min 8)</span><input type="password" value={creating.password} onChange={(e) => setCreating({ ...creating, password: e.target.value })} /></div>
+            <div className="field"><span>Rank</span>
+              <select value={creating.rank} onChange={(e) => setCreating({ ...creating, rank: e.target.value })}>
+                {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>rank {n}</option>)}
+              </select>
+            </div>
+            <div className="field"><span>Department</span>
+              <select value={creating.department_id} onChange={(e) => setCreating({ ...creating, department_id: e.target.value })}>
+                <option value="">department…</option>
+                {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
+            <button className="btn btn-primary" type="submit">Add</button>
+          </div>
+        </form>
+      </Card>
     </section>
   );
 }
@@ -228,20 +253,26 @@ function Domains() {
   }
 
   return (
-    <section>
-      <h2>Allowed email domains</h2>
-      <p>Only these exact domains can be used for employee emails (enforced by the database).</p>
-      <ul>
-        {rows.map((r) => (
-          <li key={r.id}>@{r.domain} <button onClick={() => remove(r.domain)}>Remove</button></li>
-        ))}
-      </ul>
-      <form onSubmit={add}>
-        <input placeholder="company.com" value={domain} onChange={(e) => setDomain(e.target.value)} />
-        <button type="submit">Allow domain</button>
+    <Card title="Allowed email domains">
+      <p className="muted">Only these exact domains can be used for employee emails (enforced by the database).</p>
+      {rows.length === 0 ? <Empty>No domains allowed yet.</Empty> : (
+        <ul className="rows">
+          {rows.map((r) => (
+            <li key={r.id}>
+              <div className="grow"><code>@{r.domain}</code></div>
+              <button className="btn btn-sm btn-danger" onClick={() => remove(r.domain)}>Remove</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form onSubmit={add} style={{ marginTop: 12 }}>
+        <div className="form-inline">
+          <div className="field"><span>Domain</span><input placeholder="company.com" value={domain} onChange={(e) => setDomain(e.target.value)} /></div>
+          <button className="btn btn-primary" type="submit">Allow domain</button>
+        </div>
       </form>
-      <Err msg={err} />
-    </section>
+      {err && <Alert>{err}</Alert>}
+    </Card>
   );
 }
 
@@ -290,31 +321,37 @@ function Access() {
   }
 
   return (
-    <section>
-      <h2>Access</h2>
-      <p>Deactivating removes access immediately (record kept). Rank decides who can delegate to whom.</p>
+    <Card title="Access">
+      <p className="muted">Deactivating removes access immediately (record kept). Rank decides who can delegate to whom.</p>
       <InviteCard invite={invite} onClose={() => setInvite(null)} />
       <form onSubmit={(e) => { e.preventDefault(); load(); }}>
-        <input placeholder="search email / last name" value={q} onChange={(e) => setQ(e.target.value)} />
-        <button type="submit">Search</button>
+        <div className="form-inline">
+          <div className="field" style={{ flex: 1, minWidth: 200 }}>
+            <span>Search email / last name</span>
+            <input value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+          <button className="btn btn-primary" type="submit">Search</button>
+        </div>
       </form>
-      <Err msg={err} />
-      <table border="1" cellPadding="4">
-        <thead><tr><th>Email</th><th>Name</th><th>Rank</th><th>Dept</th><th>Active</th><th></th></tr></thead>
-        <tbody>
-          {list.rows.map((r) => (
-            <tr key={r.id}>
-              <td>{r.email}</td>
-              <td>{r.first_name} {r.last_name}</td>
-              <td>{r.rank}</td>
-              <td>{r.department}</td>
-              <td><input type="checkbox" checked={r.is_active} onChange={() => toggle(r)} /></td>
-              <td><button onClick={() => resetPassword(r)}>Reset password</button></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+      {err && <Alert>{err}</Alert>}
+      <div className="table-wrap" style={{ marginTop: 12 }}>
+        <table className="grid-table">
+          <thead><tr><th>Email</th><th>Name</th><th>Rank</th><th>Dept</th><th>Active</th><th></th></tr></thead>
+          <tbody>
+            {list.rows.map((r) => (
+              <tr key={r.id}>
+                <td className="muted">{r.email}</td>
+                <td><strong>{r.first_name} {r.last_name}</strong></td>
+                <td><Badge kind="rank">R{r.rank}</Badge></td>
+                <td>{r.department}</td>
+                <td><input type="checkbox" checked={r.is_active} onChange={() => toggle(r)} title={r.is_active ? 'Deactivate' : 'Reactivate'} /></td>
+                <td><button className="btn btn-sm" onClick={() => resetPassword(r)}>Reset password</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }
 
@@ -386,49 +423,75 @@ function Security() {
 
   return (
     <section>
-      <h2>Security</h2>
-      <Err msg={err} />
-      <h3>Session policy</h3>
-      <form onSubmit={savePolicy}>
-        <label>
-          Ask for password again after{' '}
-          <input type="number" min="1" max="90" value={days} onChange={(e) => setDays(e.target.value)} style={{ width: '4em' }} />{' '}
-          days of inactivity
-        </label>{' '}
-        <button type="submit">Save</button>
-      </form>
-      <p style={{ color: '#555' }}>Employees stay signed in automatically until they’re inactive this long (default 7 days). Applies to future sessions; already-idle sessions beyond the new limit are revoked.</p>
-      <h3>Admin IP restriction: {policy ? (policy.ipRestrictionEnabled ? 'ON' : 'OFF') : '…'}</h3>
-      <form onSubmit={savePolicy}>
-        <label>
-          <input type="checkbox" checked={restrict} onChange={(e) => setRestrict(e.target.checked)} />{' '}
-          Restrict admin logins to the IPs below
-        </label>{' '}
-        <button type="submit">Save</button>
-      </form>
-      <p style={{ border: '1px solid #ccc', padding: 8 }}>
-        Employees can always log in from anywhere. When this is <strong>ON</strong>, admin accounts
-        only work from the listed IPs — any other network is blocked even with the right password.
-        When <strong>OFF</strong>, admins can log in from any network. {ips.length === 0 && restrict && (
-          <strong style={{ color: 'darkred' }}> Warning: the list is empty, so NO admin can log in until you add an IP.</strong>
+      {err && <Alert>{err}</Alert>}
+      <Card title="Session policy">
+        <form onSubmit={savePolicy}>
+          <div className="form-inline">
+            <div className="field">
+              <span>Ask for password again after (days of inactivity)</span>
+              <input type="number" min="1" max="90" value={days} onChange={(e) => setDays(e.target.value)} style={{ width: '6em' }} />
+            </div>
+            <button className="btn btn-primary" type="submit">Save</button>
+          </div>
+        </form>
+        <p className="muted">Employees stay signed in automatically until they’re inactive this long (default 7 days). Applies to future sessions; already-idle sessions beyond the new limit are revoked.</p>
+      </Card>
+      <Card
+        title={<>Admin IP restriction: {policy ? (policy.ipRestrictionEnabled ? <Badge kind="blocked">ON</Badge> : <Badge kind="done">OFF</Badge>) : '…'}</>}
+      >
+        <form onSubmit={savePolicy}>
+          <label className="check">
+            <input type="checkbox" checked={restrict} onChange={(e) => setRestrict(e.target.checked)} />{' '}
+            Restrict admin logins to the IPs below
+          </label>{' '}
+          <button className="btn btn-primary btn-sm" type="submit">Save</button>
+        </form>
+        <Alert kind="note">
+          Employees can always log in from anywhere. When this is <strong>ON</strong>, admin accounts
+          only work from the listed IPs — any other network is blocked even with the right password.
+          When <strong>OFF</strong>, admins can log in from any network. {ips.length === 0 && restrict && (
+            <strong> Warning: the list is empty, so NO admin can log in until you add an IP.</strong>
+          )}
+        </Alert>
+        {ips.length === 0 ? <Empty>No allowed IPs.</Empty> : (
+          <ul className="rows">
+            {ips.map((r) => (
+              <li key={r.id}>
+                <div className="grow"><code>{r.cidr}</code> {r.label ? <small className="muted">({r.label})</small> : ''}</div>
+                <button className="btn btn-sm btn-danger" onClick={() => removeIp(r.id, r.cidr)}>Remove</button>
+              </li>
+            ))}
+          </ul>
         )}
-      </p>
-      <ul>
-        {ips.map((r) => (
-          <li key={r.id}><code>{r.cidr}</code> {r.label ? `(${r.label})` : ''} <button onClick={() => removeIp(r.id, r.cidr)}>Remove</button></li>
-        ))}
-      </ul>
-      <form onSubmit={addIp}>
-        <input placeholder="203.0.113.8 or 203.0.113.0/24" value={newIp} onChange={(e) => setNewIp(e.target.value)} style={{ width: '20em' }} />
-        <input placeholder="label (e.g. office)" value={label} onChange={(e) => setLabel(e.target.value)} />
-        <button type="submit">Allow IP</button>
-      </form>
-      <h3>Recent auth activity</h3>
-      <ul>
-        {auditRows.map((r) => (
-          <li key={r.id}>{r.created_at} — {r.action} {r.ip ? `(${r.ip})` : ''}</li>
-        ))}
-      </ul>
+        <form onSubmit={addIp} style={{ marginTop: 12 }}>
+          <div className="form-inline">
+            <div className="field" style={{ flex: 1, minWidth: 200 }}>
+              <span>IP or range</span>
+              <input placeholder="203.0.113.8 or 203.0.113.0/24" value={newIp} onChange={(e) => setNewIp(e.target.value)} />
+            </div>
+            <div className="field">
+              <span>Label</span>
+              <input placeholder="e.g. office" value={label} onChange={(e) => setLabel(e.target.value)} />
+            </div>
+            <button className="btn btn-primary" type="submit">Allow IP</button>
+          </div>
+        </form>
+      </Card>
+      <Card title="Recent auth activity">
+        {auditRows.length === 0 ? <Empty>No recent activity.</Empty> : (
+          <ul className="rows">
+            {auditRows.map((r) => (
+              <li key={r.id}>
+                <div className="grow">
+                  <Badge kind="member">{r.action}</Badge>{' '}
+                  {r.ip ? <code>{r.ip}</code> : null}
+                </div>
+                <small className="muted">{r.created_at}</small>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
     </section>
   );
 }
@@ -439,11 +502,17 @@ export default function AdminPanel() {
 
   return (
     <section>
-      <h2>Admin panel</h2>
-      {TABS.map((t) => (
-        <button key={t} disabled={t === tab} onClick={() => setTab(t)}>{t}</button>
-      ))}
-      {' '}<button onClick={() => logout(false)}>Log out</button>
+      <div className="page-head">
+        <h1>Admin panel</h1>
+        <p className="page-sub">Back-office controls — people, access and security.</p>
+      </div>
+      <div className="tabs">
+        {TABS.map((t) => (
+          <button key={t} className={t === tab ? 'tab active' : 'tab'} onClick={() => setTab(t)}>{t}</button>
+        ))}
+        <span style={{ flex: 1 }} />
+        <button className="tab" onClick={() => logout(false)}>Log out</button>
+      </div>
       {tab === 'Overview' && <Overview />}
       {tab === 'Employees' && <Employees />}
       {tab === 'Domains' && <Domains />}

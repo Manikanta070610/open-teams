@@ -93,6 +93,16 @@ async function canCreateProject(user, owningDeptId) {
   return false;
 }
 
+// Staffing rule: project heads (owner|lead) and chiefs anywhere; managers
+// (rank>=4) may staff projects they belong to, even as plain members.
+async function canStaffProject(projectId, user) {
+  if (isChiefOrAdmin(user)) return true;
+  const role = await getProjectRole(projectId, user.id);
+  if (isProjectHeadRole(role)) return true;
+  if (role && Number(user.rank) >= 4) return true;
+  return false;
+}
+
 // --- POST / — create standalone project, creator becomes owner (DRI) ---
 router.post('/', async (req, res, next) => {
   try {
@@ -253,7 +263,8 @@ router.patch('/:id', async (req, res, next) => {
   } catch (err) { return next(err); }
 });
 
-// --- POST /:id/members — direct add by heads (single/multi-dept) ---
+// --- POST /:id/members — direct add by heads, chiefs, or manager-members
+// (downward rank: staffer rank >= target rank; owner/lead grants need head/chief) ---
 router.post('/:id/members', async (req, res, next) => {
   try {
     if (rateLimited('prj-staff', req.ip, WRITE_MAX, WRITE_WINDOW_MS)) {
@@ -263,10 +274,12 @@ router.post('/:id/members', async (req, res, next) => {
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'invalid id' });
     const p = await projectRow(id);
     if (!p) return res.status(404).json({ error: 'not found' });
-    const role = await getProjectRole(id, req.user.id);
-    if (!isProjectHeadRole(role) && !isChiefOrAdmin(req.user)) {
-      return res.status(403).json({ error: 'project heads only' });
+    if (!(await canStaffProject(id, req.user))) {
+      return res.status(403).json({ error: 'project heads or managers only' });
     }
+    // Staffer's head status gates owner/lead grants (no ownership hijacks).
+    const staffRole = await getProjectRole(id, req.user.id);
+    const staffHead = isProjectHeadRole(staffRole) || isChiefOrAdmin(req.user);
     const list = Array.isArray(req.body?.members) ? req.body.members : null;
     if (!list || list.length === 0 || list.length > 50) {
       return res.status(400).json({ error: 'members[] must have 1-50 entries' });
@@ -286,11 +299,25 @@ router.post('/:id/members', async (req, res, next) => {
       toAdd.push({ employeeId, role: r, allocation, primary: m?.is_primary !== false });
     }
     const { rows: found } = await pool.query(
-      'SELECT id FROM employees WHERE id = ANY($1::bigint[]) AND is_active = TRUE',
+      'SELECT id, rank FROM employees WHERE id = ANY($1::bigint[]) AND is_active = TRUE',
       [toAdd.map((t) => t.employeeId)]
     );
     if (found.length !== toAdd.length) {
       return res.status(400).json({ error: 'all members must be existing active employees' });
+    }
+    // Downward staffing: staffer rank must cover every target rank
+    // (same rule as task delegation: rank >= rank, peers OK), and only
+    // heads/chiefs may hand out owner/lead roles.
+    const rankById = new Map(found.map((f) => [Number(f.id), Number(f.rank)]));
+    for (const t of toAdd) {
+      if (Number(req.user.rank) < rankById.get(t.employeeId)) {
+        return res.status(403).json({
+          error: `rank ${req.user.rank} cannot staff rank ${rankById.get(t.employeeId)}`,
+        });
+      }
+      if (!staffHead && (t.role === 'owner' || t.role === 'lead')) {
+        return res.status(403).json({ error: 'only project heads or chiefs can assign owner/lead roles' });
+      }
     }
     // Single-owner (DRI): promoting to owner demotes the current owner.
     if (toAdd.some((t) => t.role === 'owner')) {
@@ -305,6 +332,51 @@ router.post('/:id/members', async (req, res, next) => {
       await logActivity(id, null, req.user.id, 'member.add', { employee_id: t.employeeId, role: t.role });
     }
     return res.status(201).json(await projectDetail(id));
+  } catch (err) { return next(err); }
+});
+
+// --- DELETE /:id/members/:empId — remove by heads, chiefs, or manager-members
+// (downward rank: cannot remove a higher rank; sole owner is protected) ---
+router.delete('/:id/members/:empId', async (req, res, next) => {
+  try {
+    if (rateLimited('prj-staff', req.ip, WRITE_MAX, WRITE_WINDOW_MS)) {
+      return res.status(429).json({ error: 'too many attempts, try later' });
+    }
+    const id = Number(req.params.id);
+    const empId = Number(req.params.empId);
+    if (!Number.isInteger(id) || !Number.isInteger(empId)) {
+      return res.status(400).json({ error: 'invalid id' });
+    }
+    const p = await projectRow(id);
+    if (!p) return res.status(404).json({ error: 'not found' });
+    if (!(await canStaffProject(id, req.user))) {
+      return res.status(403).json({ error: 'project heads or managers only' });
+    }
+    const target = await pool.query(
+      `SELECT m.role, e.rank FROM project_members m
+         JOIN employees e ON e.id = m.employee_id
+        WHERE m.project_id = $1 AND m.employee_id = $2`,
+      [id, empId]
+    );
+    if (target.rows.length === 0) return res.status(404).json({ error: 'not a project member' });
+    // Downward removal: cannot remove a higher rank (peers OK).
+    if (Number(req.user.rank) < Number(target.rows[0].rank)) {
+      return res.status(403).json({
+        error: `rank ${req.user.rank} cannot remove rank ${target.rows[0].rank}`,
+      });
+    }
+    if (target.rows[0].role === 'owner') {
+      const owners = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM project_members WHERE project_id = $1 AND role = 'owner'`,
+        [id]
+      );
+      if (owners.rows[0].n <= 1) {
+        return res.status(409).json({ error: 'cannot remove the only owner' });
+      }
+    }
+    await pool.query('DELETE FROM project_members WHERE project_id = $1 AND employee_id = $2', [id, empId]);
+    await logActivity(id, null, req.user.id, 'member.remove', { employee_id: empId });
+    return res.json(await projectDetail(id));
   } catch (err) { return next(err); }
 });
 
@@ -572,6 +644,297 @@ router.get('/:id/activity', async (req, res, next) => {
         WHERE ${cond} ORDER BY l.id DESC LIMIT $${vals.length}`, vals
     );
     return res.json(rows);
+  } catch (err) { return next(err); }
+});
+
+// ---------------------------------------------------------------------------
+// Project chat: whole-project room + 1-1 DMs + custom subgroups.
+// All endpoints are members-only (must be a current project_member).
+// The whole-project room (type='project') is implicit: every project member
+// can read/write, created lazily. Direct/group threads need explicit
+// membership; the DB triggers enforce sender/member project scoping too.
+// ---------------------------------------------------------------------------
+
+async function ensureProjectRoom(projectId, actorId) {
+  const found = await pool.query(
+    `SELECT * FROM project_chat_threads WHERE project_id = $1 AND type = 'project' LIMIT 1`,
+    [projectId]
+  );
+  if (found.rows[0]) return found.rows[0];
+  const ins = await pool.query(
+    `INSERT INTO project_chat_threads (project_id, type, created_by)
+     VALUES ($1,'project',$2) RETURNING *`,
+    [projectId, actorId]
+  );
+  return ins.rows[0];
+}
+
+async function threadMembers(threadId) {
+  const { rows } = await pool.query(
+    `SELECT tm.employee_id AS id, e.first_name, e.last_name, e.email
+       FROM project_chat_thread_members tm
+       JOIN employees e ON e.id = tm.employee_id
+      WHERE tm.thread_id = $1 ORDER BY e.first_name, e.last_name`,
+    [threadId]
+  );
+  return rows;
+}
+
+async function chatMessages(threadId, { limit = 50, beforeId = null } = {}) {
+  const lim = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const vals = [threadId];
+  let cond = 'm.thread_id = $1 AND m.is_deleted = FALSE';
+  if (Number.isInteger(beforeId)) {
+    vals.push(beforeId);
+    cond += ` AND m.id < $${vals.length}`;
+  }
+  vals.push(lim);
+  const { rows } = await pool.query(
+    `SELECT m.*, e.first_name, e.last_name FROM project_chat_messages m
+       JOIN employees e ON e.id = m.sender_id
+      WHERE ${cond} ORDER BY m.id DESC LIMIT $${vals.length}`,
+    vals
+  );
+  return rows.reverse();
+}
+
+async function requireProjectMember(projectId, userId) {
+  return getProjectRole(projectId, userId);
+}
+
+// --- GET /:id/chat — whole-project room history (members only) ---
+router.get('/:id/chat', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'invalid id' });
+    if (!(await requireProjectMember(id, req.user.id))) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    const room = await ensureProjectRoom(id, req.user.id);
+    const messages = await chatMessages(room.id, {
+      limit: req.query.limit,
+      beforeId: req.query.before_id ? Number(req.query.before_id) : null,
+    });
+    return res.json({ thread_id: Number(room.id), messages });
+  } catch (err) { return next(err); }
+});
+
+// --- POST /:id/chat — post to the whole-project room ---
+router.post('/:id/chat', async (req, res, next) => {
+  try {
+    if (rateLimited('prj-chat', req.ip, WRITE_MAX, WRITE_WINDOW_MS)) {
+      return res.status(429).json({ error: 'too many attempts, try later' });
+    }
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'invalid id' });
+    if (!(await requireProjectMember(id, req.user.id))) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    const body = String(req.body?.body || '').trim();
+    if (!body) return res.status(400).json({ error: 'body is required' });
+    if (body.length > 5000) return res.status(400).json({ error: 'body too long (max 5000)' });
+    const room = await ensureProjectRoom(id, req.user.id);
+    const { rows } = await pool.query(
+      `INSERT INTO project_chat_messages (thread_id, sender_id, body)
+       VALUES ($1,$2,$3) RETURNING *`,
+      [room.id, req.user.id, body.slice(0, 5000)]
+    );
+    const msg = rows[0];
+    const sender = await pool.query('SELECT first_name, last_name FROM employees WHERE id = $1', [req.user.id]);
+    return res.status(201).json({ ...msg, ...sender.rows[0] });
+  } catch (err) { return next(err); }
+});
+
+// --- GET /:id/threads — my DM + group threads in this project ---
+router.get('/:id/threads', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'invalid id' });
+    if (!(await requireProjectMember(id, req.user.id))) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    const { rows: threads } = await pool.query(
+      `SELECT t.* FROM project_chat_threads t
+         JOIN project_chat_thread_members tm
+           ON tm.thread_id = t.id AND tm.employee_id = $2
+        WHERE t.project_id = $1 AND t.type IN ('direct','group')
+        ORDER BY t.id DESC`,
+      [id, req.user.id]
+    );
+    const out = [];
+    for (const t of threads) {
+      const members = await threadMembers(t.id);
+      const { rows: last } = await pool.query(
+        `SELECT m.*, e.first_name, e.last_name FROM project_chat_messages m
+           JOIN employees e ON e.id = m.sender_id
+          WHERE m.thread_id = $1 AND m.is_deleted = FALSE
+          ORDER BY m.id DESC LIMIT 1`,
+        [t.id]
+      );
+      const { rows: cnt } = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM project_chat_messages WHERE thread_id = $1 AND is_deleted = FALSE`,
+        [t.id]
+      );
+      out.push({ ...t, members, last_message: last[0] || null, message_count: cnt[0].n });
+    }
+    return res.json(out);
+  } catch (err) { return next(err); }
+});
+
+// --- POST /:id/threads — start a DM or a custom group ---
+router.post('/:id/threads', async (req, res, next) => {
+  try {
+    if (rateLimited('prj-thread', req.ip, WRITE_MAX, WRITE_WINDOW_MS)) {
+      return res.status(429).json({ error: 'too many attempts, try later' });
+    }
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'invalid id' });
+    if (!(await requireProjectMember(id, req.user.id))) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    const type = String(req.body?.type || '');
+    if (!['direct', 'group'].includes(type)) {
+      return res.status(400).json({ error: "type must be 'direct' or 'group'" });
+    }
+    const rawIds = Array.isArray(req.body?.member_ids) ? req.body.member_ids : [];
+    const memberIds = [...new Set(rawIds.map(Number).filter(Number.isInteger))].filter((n) => n !== Number(req.user.id));
+    if (memberIds.length === 0) return res.status(400).json({ error: 'member_ids must include at least one other project member' });
+
+    // Every invitee must be an active member of this project.
+    const { rows: found } = await pool.query(
+      `SELECT pm.employee_id FROM project_members pm
+         JOIN employees e ON e.id = pm.employee_id AND e.is_active = TRUE
+        WHERE pm.project_id = $1 AND pm.employee_id = ANY($2::bigint[])`,
+      [id, memberIds]
+    );
+    if (found.length !== memberIds.length) {
+      return res.status(400).json({ error: 'all members must be active members of this project' });
+    }
+
+    if (type === 'direct') {
+      if (memberIds.length !== 1) return res.status(400).json({ error: 'direct chats take exactly one other member' });
+      const other = memberIds[0];
+      // Dedupe: same pair + same project reuses the existing thread.
+      const { rows: dup } = await pool.query(
+        `SELECT t.id FROM project_chat_threads t
+          WHERE t.project_id = $1 AND t.type = 'direct'
+            AND EXISTS (SELECT 1 FROM project_chat_thread_members m WHERE m.thread_id = t.id AND m.employee_id = $2)
+            AND EXISTS (SELECT 1 FROM project_chat_thread_members m WHERE m.thread_id = t.id AND m.employee_id = $3)
+            AND (SELECT COUNT(*) FROM project_chat_thread_members m WHERE m.thread_id = t.id) = 2
+          LIMIT 1`,
+        [id, req.user.id, other]
+      );
+      if (dup[0]) {
+        const members = await threadMembers(dup[0].id);
+        const { rows: t } = await pool.query('SELECT * FROM project_chat_threads WHERE id = $1', [dup[0].id]);
+        return res.json({ ...t[0], members, reused: true });
+      }
+    }
+
+    if (type === 'group') {
+      const title = String(req.body?.title || '').trim();
+      if (!title) return res.status(400).json({ error: 'title is required for groups' });
+      if (title.length > 80) return res.status(400).json({ error: 'title too long (max 80)' });
+      if (memberIds.length < 1 || memberIds.length > 49) {
+        return res.status(400).json({ error: 'groups need 1-49 other members' });
+      }
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const title = type === 'group' ? String(req.body.title).trim().slice(0, 80) : null;
+      const { rows } = await client.query(
+        `INSERT INTO project_chat_threads (project_id, type, title, created_by)
+         VALUES ($1,$2,$3,$4) RETURNING *`,
+        [id, type, title, req.user.id]
+      );
+      const thread = rows[0];
+      const allIds = [Number(req.user.id), ...memberIds];
+      for (const empId of allIds) {
+        await client.query(
+          `INSERT INTO project_chat_thread_members (thread_id, employee_id)
+           VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+          [thread.id, empId]
+        );
+      }
+      await client.query('COMMIT');
+      const members = await threadMembers(thread.id);
+      return res.status(201).json({ ...thread, members });
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch { /* closed */ }
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) { return next(err); }
+});
+
+async function loadThreadInProject(projectId, threadId) {
+  const { rows } = await pool.query(
+    'SELECT * FROM project_chat_threads WHERE id = $1 AND project_id = $2',
+    [threadId, projectId]
+  );
+  return rows[0] || null;
+}
+
+async function requireThreadMember(threadId, userId) {
+  const { rows } = await pool.query(
+    'SELECT 1 FROM project_chat_thread_members WHERE thread_id = $1 AND employee_id = $2',
+    [threadId, userId]
+  );
+  return rows.length > 0;
+}
+
+// --- GET /:id/threads/:tid/messages — DM/group history ---
+router.get('/:id/threads/:tid/messages', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const tid = Number(req.params.tid);
+    if (!Number.isInteger(id) || !Number.isInteger(tid)) return res.status(400).json({ error: 'invalid id' });
+    if (!(await requireProjectMember(id, req.user.id))) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    const thread = await loadThreadInProject(id, tid);
+    if (!thread || thread.type === 'project') return res.status(404).json({ error: 'not found' });
+    if (!(await requireThreadMember(tid, req.user.id))) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    const messages = await chatMessages(tid, {
+      limit: req.query.limit,
+      beforeId: req.query.before_id ? Number(req.query.before_id) : null,
+    });
+    return res.json({ thread_id: Number(tid), messages });
+  } catch (err) { return next(err); }
+});
+
+// --- POST /:id/threads/:tid/messages — reply in a DM/group ---
+router.post('/:id/threads/:tid/messages', async (req, res, next) => {
+  try {
+    if (rateLimited('prj-chat', req.ip, WRITE_MAX, WRITE_WINDOW_MS)) {
+      return res.status(429).json({ error: 'too many attempts, try later' });
+    }
+    const id = Number(req.params.id);
+    const tid = Number(req.params.tid);
+    if (!Number.isInteger(id) || !Number.isInteger(tid)) return res.status(400).json({ error: 'invalid id' });
+    if (!(await requireProjectMember(id, req.user.id))) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    const thread = await loadThreadInProject(id, tid);
+    if (!thread || thread.type === 'project') return res.status(404).json({ error: 'not found' });
+    if (!(await requireThreadMember(tid, req.user.id))) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    const body = String(req.body?.body || '').trim();
+    if (!body) return res.status(400).json({ error: 'body is required' });
+    if (body.length > 5000) return res.status(400).json({ error: 'body too long (max 5000)' });
+    const { rows } = await pool.query(
+      `INSERT INTO project_chat_messages (thread_id, sender_id, body)
+       VALUES ($1,$2,$3) RETURNING *`,
+      [tid, req.user.id, body.slice(0, 5000)]
+    );
+    const sender = await pool.query('SELECT first_name, last_name FROM employees WHERE id = $1', [req.user.id]);
+    return res.status(201).json({ ...rows[0], ...sender.rows[0] });
   } catch (err) { return next(err); }
 });
 

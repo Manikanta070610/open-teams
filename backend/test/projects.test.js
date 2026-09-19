@@ -81,7 +81,7 @@ test('setup: users + workspace head (junior promoted to lead)', async () => {
   jrId = (await pool.query('SELECT id FROM employees WHERE email = $1', [JR])).rows[0].id;
 
   // Chief creates a workspace, adds junior, promotes to lead (= head, any rank).
-  const ws = await req('POST', '/api/workspaces', { token: chiefTok, body: { name: 'Ws-Test-Prj-Head' } });
+  const ws = await req('POST', '/api/workspaces', { token: chiefTok, body: { name: 'Prj-Test-Ws-Head' } });
   assert.equal(ws.status, 201);
   wsId = ws.data.id;
   const add = await req('POST', `/api/workspaces/${wsId}/members`, {
@@ -103,9 +103,9 @@ after(async () => {
   await pool.query(`DELETE FROM tasks WHERE project_id IN (SELECT id FROM projects WHERE name LIKE 'Prj-Test-%')`);
   await pool.query(`DELETE FROM project_members WHERE project_id IN (SELECT id FROM projects WHERE name LIKE 'Prj-Test-%')`);
   await pool.query(`DELETE FROM projects WHERE name LIKE 'Prj-Test-%'`);
-  await pool.query(`DELETE FROM workspace_staff_requests WHERE workspace_id IN (SELECT id FROM workspaces WHERE name LIKE 'Ws-Test-Prj-%')`);
-  await pool.query(`DELETE FROM workspace_members WHERE workspace_id IN (SELECT id FROM workspaces WHERE name LIKE 'Ws-Test-Prj-%')`);
-  await pool.query(`DELETE FROM workspaces WHERE name LIKE 'Ws-Test-Prj-%'`);
+  await pool.query(`DELETE FROM workspace_staff_requests WHERE workspace_id IN (SELECT id FROM workspaces WHERE name LIKE 'Prj-Test-Ws-%')`);
+  await pool.query(`DELETE FROM workspace_members WHERE workspace_id IN (SELECT id FROM workspaces WHERE name LIKE 'Prj-Test-Ws-%')`);
+  await pool.query(`DELETE FROM workspaces WHERE name LIKE 'Prj-Test-Ws-%'`);
   await pool.query(`DELETE FROM auth_refresh_sessions WHERE employee_id IN (SELECT id FROM employees WHERE email = ANY($1))`, [EMAILS]);
   await pool.query(`DELETE FROM employees WHERE email = ANY($1)`, [EMAILS]);
   server.close();
@@ -161,6 +161,89 @@ test('members: owner direct-adds cross-dept HR + jr; non-head 403; dup 409', asy
     token: mgrTok, body: { members: [{ employee_id: jrId }] },
   });
   assert.equal(dup.status, 409);
+});
+
+test('members: manager-member (non-head) can staff; junior-member still 403', async () => {
+  const headProj = (await pool.query(`SELECT id FROM projects WHERE name = 'Prj-Test-Head'`)).rows[0].id;
+  const staffMgr = await req('POST', `/api/projects/${headProj}/members`, {
+    token: chiefTok, body: { members: [{ employee_id: mgrId }] },
+  });
+  assert.equal(staffMgr.status, 201);
+  const mgrAdds = await req('POST', `/api/projects/${headProj}/members`, {
+    token: mgrTok, body: { members: [{ employee_id: jrId }] },
+  });
+  assert.equal(mgrAdds.status, 201);
+  assert.ok(mgrAdds.data.members.some((m) => Number(m.employee_id) === Number(jrId)));
+  const jrAdds = await req('POST', `/api/projects/${headProj}/members`, {
+    token: jrTok, body: { members: [{ employee_id: chiefId }] },
+  });
+  assert.equal(jrAdds.status, 403);
+});
+
+test('remove: manager-member can remove; junior-member 403; only-owner 409', async () => {
+  const mk = await req('POST', '/api/projects', {
+    token: chiefTok, body: { name: 'Prj-Test-Remove', owning_department_id: engId },
+  });
+  assert.equal(mk.status, 201);
+  const rpId = mk.data.id;
+  const add = await req('POST', `/api/projects/${rpId}/members`, {
+    token: chiefTok, body: { members: [{ employee_id: mgrId }, { employee_id: jrId }] },
+  });
+  assert.equal(add.status, 201);
+  const rm = await req('DELETE', `/api/projects/${rpId}/members/${jrId}`, { token: mgrTok });
+  assert.equal(rm.status, 200);
+  assert.ok(!rm.data.members.some((m) => Number(m.employee_id) === Number(jrId)));
+  const gone = await req('DELETE', `/api/projects/${rpId}/members/${jrId}`, { token: mgrTok });
+  assert.equal(gone.status, 404);
+  const reAdd = await req('POST', `/api/projects/${rpId}/members`, {
+    token: chiefTok, body: { members: [{ employee_id: jrId }] },
+  });
+  assert.equal(reAdd.status, 201);
+  const jrRm = await req('DELETE', `/api/projects/${rpId}/members/${mgrId}`, { token: jrTok });
+  assert.equal(jrRm.status, 403);
+  const rmOwner = await req('DELETE', `/api/projects/${rpId}/members/${chiefId}`, { token: chiefTok });
+  assert.equal(rmOwner.status, 409);
+});
+
+test('staffing respects downward rank (add and remove)', async () => {
+  const headProj = (await pool.query(`SELECT id FROM projects WHERE name = 'Prj-Test-Head'`)).rows[0].id;
+  // HEAD owns that project but is rank 1: cannot remove the rank-4 manager.
+  const headRemovesMgr = await req('DELETE', `/api/projects/${headProj}/members/${mgrId}`, { token: headTok });
+  assert.equal(headRemovesMgr.status, 403);
+  // Fresh project: chief owns, manager is a plain member.
+  const mk = await req('POST', '/api/projects', {
+    token: chiefTok, body: { name: 'Prj-Test-Rank', owning_department_id: engId },
+  });
+  assert.equal(mk.status, 201);
+  const rkId = mk.data.id;
+  const addMgr = await req('POST', `/api/projects/${rkId}/members`, {
+    token: chiefTok, body: { members: [{ employee_id: mgrId }] },
+  });
+  assert.equal(addMgr.status, 201);
+  // Manager (rank 4) cannot add a higher rank, even as a plain member.
+  // (Rank-6 outsider created inline; never joins, so cleanup is one DELETE.)
+  const BIG = 'prj-big@example.com';
+  await pool.query('DELETE FROM employees WHERE email = $1', [BIG]);
+  await pool.query(
+    'INSERT INTO employees (first_name, last_name, email, rank, department_id) VALUES ($1, $2, $3, 6, $4)',
+    ['Prj', 'Big', BIG, engId]
+  );
+  const bigId = (await pool.query('SELECT id FROM employees WHERE email = $1', [BIG])).rows[0].id;
+  const mgrAddsBig = await req('POST', `/api/projects/${rkId}/members`, {
+    token: mgrTok, body: { members: [{ employee_id: bigId }] },
+  });
+  assert.equal(mgrAddsBig.status, 403);
+  await pool.query('DELETE FROM employees WHERE email = $1', [BIG]);
+  // Manager cannot grant owner/lead roles, even to a junior.
+  const mgrMakesOwner = await req('POST', `/api/projects/${rkId}/members`, {
+    token: mgrTok, body: { members: [{ employee_id: jrId, role: 'owner' }] },
+  });
+  assert.equal(mgrMakesOwner.status, 403);
+  // Peer-or-lower add still works.
+  const mgrAddsJr = await req('POST', `/api/projects/${rkId}/members`, {
+    token: mgrTok, body: { members: [{ employee_id: jrId }] },
+  });
+  assert.equal(mgrAddsJr.status, 201);
 });
 
 test('candidates show workload columns', async () => {

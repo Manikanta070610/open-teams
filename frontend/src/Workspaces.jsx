@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './adminApi.js';
 import { useAuth } from './AuthContext.jsx';
+import { Alert, Avatar, Badge, Card, Empty } from './ui.jsx';
 
 // Workspaces tab: additive view reusing the same auth/fetch patterns as
 // Directory (abortable fetch, 401 -> sessionExpired, inline error/empty states).
@@ -106,107 +107,149 @@ export default function Workspaces() {
 
   return (
     <section>
-      <h2>Workspaces</h2>
-      {err && <p style={{ color: 'darkred' }}>Error: {err}</p>}
+      <div className="page-head">
+        <h1>Workspaces</h1>
+        <p className="page-sub">Team homes — staffing runs through requests.</p>
+      </div>
+      {err && <Alert>{err}</Alert>}
       {canCreate && (
-        <form onSubmit={create}>
-          <h3>New workspace (chiefs & admins)</h3>
-          <input placeholder="Workspace name" value={name} onChange={(e) => setName(e.target.value)} />{' '}
-          <input
-            placeholder="Description (optional)"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            style={{ width: '24em' }}
-          />{' '}
-          <button type="submit" disabled={creating}>Create</button>
-        </form>
+        <Card title="New workspace">
+          <p className="muted">Chiefs and admins only.</p>
+          <form onSubmit={create}>
+            <div className="form-inline">
+              <div className="field">
+                <span>Workspace name</span>
+                <input value={name} onChange={(e) => setName(e.target.value)} />
+              </div>
+              <div className="field" style={{ flex: 1, minWidth: 200 }}>
+                <span>Description (optional)</span>
+                <input value={description} onChange={(e) => setDescription(e.target.value)} />
+              </div>
+              <button className="btn btn-primary" type="submit" disabled={creating}>{creating ? 'Creating…' : 'Create'}</button>
+            </div>
+          </form>
+        </Card>
       )}
-      {list === null ? (
-        <p>Loading…</p>
-      ) : list.length === 0 ? (
-        <p>No workspaces yet. Chiefs or admins can create one above.</p>
-      ) : (
-        <ul>
-          {list.map((w) => (
-            <li key={w.id}>
-              <button onClick={() => open(w.id)}>{w.name}</button>{' '}
-              <small>({w.my_role}{w.my_allocation != null && w.my_allocation < 100 ? `, ${w.my_allocation}%` : ''})</small>
-            </li>
-          ))}
-        </ul>
-      )}
-      {selected && (
-        <article style={{ border: '1px solid #ccc', padding: 8, marginTop: 8 }}>
-          <h3>{selected.name}</h3>
-          {selected.description && <p>{selected.description}</p>}
-          <h4>Members</h4>
-          {(selected.members || []).length === 0 ? (
-            <p>No members.</p>
+      <div className="grid cols-2">
+        <Card title="My workspaces">
+          {list === null ? (
+            <p className="loading">Loading</p>
+          ) : list.length === 0 ? (
+            <Empty>No workspaces yet. Chiefs or admins can create one above.</Empty>
           ) : (
-            <ul>
-              {(selected.members || []).map((m) => (
-                <li key={m.employee_id}>
-                  {m.first_name} {m.last_name} — {m.role}
-                  {(m.role === 'owner' || m.role === 'lead') && <strong> [HEAD]</strong>}
-                  {m.allocation_pct < 100 ? ` (${m.allocation_pct}%${m.is_primary ? '' : ', shared'})` : ' (full-time)'}
-                  {canPromote && (
-                    <>
-                      {' '}
-                      <select value={m.role} onChange={(e) => promote(m.employee_id, e.target.value)} title="Head = owner/lead (any rank)">
-                        <option value="owner">owner</option>
-                        <option value="lead">lead</option>
-                        <option value="member">member</option>
-                        <option value="viewer">viewer</option>
-                      </select>
-                    </>
+            <ul className="rows">
+              {list.map((w) => (
+                <li key={w.id} style={selected?.id === w.id ? { background: 'var(--brand-soft)', borderRadius: 8 } : undefined}>
+                  <div className="grow">
+                    <button className="link-btn" onClick={() => open(w.id)}>{w.name}</button>
+                  </div>
+                  <Badge kind={w.my_role}>{w.my_role}</Badge>
+                  {w.my_allocation != null && w.my_allocation < 100 && (
+                    <small className="muted">{w.my_allocation}%</small>
                   )}
                 </li>
               ))}
             </ul>
           )}
-          <h4>Staffing requests</h4>
-          {(selected.staff_requests || []).length === 0 ? (
-            <p>No staffing requests.</p>
+        </Card>
+        <div>
+          {!selected ? (
+            <Card title="Details"><Empty>Pick a workspace to see members and requests.</Empty></Card>
           ) : (
-            <ul>
-              {(selected.staff_requests || []).map((r) => (
-                <li key={r.id}>
-                  {r.headcount} needed{r.ranks_needed?.length ? ` (ranks ${r.ranks_needed.join(',')})` : ''} —{' '}
-                  {r.priority} — {r.status}
-                  {r.requirements ? `: ${r.requirements}` : ''}
-                </li>
-              ))}
-            </ul>
-          )}
-          <form onSubmit={staffRequest}>
-            <h4>Request people {canStaff ? '(HR staffs via Admin → Employees, then adds here)' : ''}</h4>
-            <input
-              placeholder="Requirements (optional)"
-              value={reqForm.requirements}
-              onChange={(e) => setReqForm((f) => ({ ...f, requirements: e.target.value }))}
-              style={{ width: '24em' }}
-            />{' '}
-            <input
-              type="number"
-              min="1"
-              max="100"
-              value={reqForm.headcount}
-              onChange={(e) => setReqForm((f) => ({ ...f, headcount: e.target.value }))}
-              style={{ width: '5em' }}
-            />{' '}
-            <select
-              value={reqForm.priority}
-              onChange={(e) => setReqForm((f) => ({ ...f, priority: e.target.value }))}
+            <Card
+              title={selected.name}
+              action={selected.status ? <Badge kind={selected.status}>{selected.status}</Badge> : null}
             >
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
-              <option value="urgent">urgent</option>
-            </select>{' '}
-            <button type="submit">Request</button>
-          </form>
-        </article>
-      )}
+              {selected.description && <p className="muted">{selected.description}</p>}
+              <h4>Members</h4>
+              {(selected.members || []).length === 0 ? (
+                <Empty>No members.</Empty>
+              ) : (
+                <ul className="rows">
+                  {(selected.members || []).map((m) => (
+                    <li key={m.employee_id}>
+                      <Avatar first={m.first_name} last={m.last_name} />
+                      <div className="grow">
+                        <strong>{m.first_name} {m.last_name}</strong>
+                        <div>
+                          <small className="muted">
+                            {m.allocation_pct < 100 ? `${m.allocation_pct}%${m.is_primary ? '' : ', shared'}` : 'full-time'}
+                          </small>
+                        </div>
+                      </div>
+                      <Badge kind={m.role}>{m.role}</Badge>
+                      {(m.role === 'owner' || m.role === 'lead') && <Badge kind="head">head</Badge>}
+                      {canPromote && (
+                        <select value={m.role} onChange={(e) => promote(m.employee_id, e.target.value)} title="Head = owner/lead (any rank)">
+                          <option value="owner">owner</option>
+                          <option value="lead">lead</option>
+                          <option value="member">member</option>
+                          <option value="viewer">viewer</option>
+                        </select>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <h4 className="section-gap">Staffing requests</h4>
+              {(selected.staff_requests || []).length === 0 ? (
+                <Empty>No staffing requests.</Empty>
+              ) : (
+                <ul className="rows">
+                  {(selected.staff_requests || []).map((r) => (
+                    <li key={r.id}>
+                      <div className="grow">
+                        <strong>{r.headcount} needed</strong>
+                        {r.ranks_needed?.length ? ` (ranks ${r.ranks_needed.join(', ')})` : ''}
+                        {r.requirements ? <div><small className="muted">{r.requirements}</small></div> : null}
+                      </div>
+                      <Badge kind={r.priority}>{r.priority}</Badge>
+                      <Badge kind="member">{r.status}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <h4 className="section-gap">Request people</h4>
+              {canStaff && <p className="muted">HR staffs via Admin → Employees, then adds here.</p>}
+              <form onSubmit={staffRequest}>
+                <div className="form-inline">
+                  <div className="field" style={{ flex: 1, minWidth: 160 }}>
+                    <span>Requirements (optional)</span>
+                    <input
+                      value={reqForm.requirements}
+                      onChange={(e) => setReqForm((f) => ({ ...f, requirements: e.target.value }))}
+                    />
+                  </div>
+                  <div className="field">
+                    <span>Headcount</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      value={reqForm.headcount}
+                      onChange={(e) => setReqForm((f) => ({ ...f, headcount: e.target.value }))}
+                      style={{ width: '5em' }}
+                    />
+                  </div>
+                  <div className="field">
+                    <span>Priority</span>
+                    <select
+                      value={reqForm.priority}
+                      onChange={(e) => setReqForm((f) => ({ ...f, priority: e.target.value }))}
+                    >
+                      <option value="low">low</option>
+                      <option value="medium">medium</option>
+                      <option value="high">high</option>
+                      <option value="urgent">urgent</option>
+                    </select>
+                  </div>
+                  <button className="btn btn-primary" type="submit">Request</button>
+                </div>
+              </form>
+            </Card>
+          )}
+        </div>
+      </div>
     </section>
   );
 }

@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
+    "start:public": "ADMIN_MODE=public node src/index.js",
+    "start:admin": "ADMIN_MODE=admin node src/index.js",
     "dev": "node --watch src/index.js",
+    "dev:public": "ADMIN_MODE=public node --watch src/index.js",
+    "dev:admin": "ADMIN_MODE=admin node --watch src/index.js",
     "migrate": "node src/migrate.js",
     "test": "node --test test/*.test.js"
   },

@@ -32,6 +32,9 @@ export async function api(path, { method = 'GET', body, signal } = {}) {
   if (!res.ok) {
     const err = new Error((data && data.error) || `request failed (${res.status})`);
     err.status = res.status;
+    // Browser-console trail for every failed call (open DevTools > Console).
+    // Mirrors the backend request log line so frontend/backend errors correlate.
+    console.error(`[api] ${method} ${path} -> ${res.status}: ${err.message}`);
     throw err;
   }
   return data;

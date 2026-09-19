@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from './adminApi.js';
 import { useAuth } from './AuthContext.jsx';
 import Profile from './Profile.jsx';
+import { Alert, Badge, Card, Empty, Stat } from './ui.jsx';
 
 // Dashboard is the homepage: my open work, overdue count, my projects,
 // watched tasks, and recent updates from projects I belong to.
@@ -26,76 +27,102 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (err) return <p style={{ color: 'darkred' }}>Error: {err}</p>;
-  if (!data) return <p>Loading your work…</p>;
+  if (err) return <Alert>{err}</Alert>;
+  if (!data) return <p className="loading">Loading your work</p>;
   const today = new Date().toISOString().slice(0, 10);
+  const openCount = data.open_tasks?.length ?? 0;
+  const overdue = data.overdue_count ?? 0;
 
   return (
     <section>
-      <h2>My work</h2>
-      <p>
-        {data.open_tasks?.length ?? 0} open tasks
-        {(data.overdue_count ?? 0) > 0 && (
-          <strong style={{ color: 'darkred' }}> — {data.overdue_count} overdue</strong>
-        )}
-        {' '}· {data.projects?.length ?? 0} active projects · {data.watching?.length ?? 0} watched
-      </p>
-      <h3>Open tasks</h3>
-      {(data.open_tasks || []).length === 0 ? (
-        <p>Nothing assigned. Enjoy the quiet.</p>
-      ) : (
-        <ul>
-          {data.open_tasks.map((t) => {
-            const overdue = t.due_date && String(t.due_date).slice(0, 10) < today;
-            return (
-              <li key={t.id} style={overdue ? { color: 'darkred' } : undefined}>
-                {t.title} — {t.project_name} — {t.status}
-                {t.due_date ? ` (due ${String(t.due_date).slice(0, 10)})` : ''}
-                {overdue ? ' — OVERDUE' : ''}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      <h3>My projects</h3>
-      {(data.projects || []).length === 0 ? (
-        <p>No projects yet.</p>
-      ) : (
-        <ul>
-          {data.projects.map((p) => (
-            <li key={p.id}>
-              {p.name} — {p.my_role} ({p.status})
-            </li>
-          ))}
-        </ul>
-      )}
-      <h3>Watched</h3>
-      {(data.watching || []).length === 0 ? (
-        <p>Nothing watched.</p>
-      ) : (
-        <ul>
-          {data.watching.map((t) => (
-            <li key={t.id}>
-              {t.title} — {t.project_name} — {t.status}
-            </li>
-          ))}
-        </ul>
-      )}
-      <h3>Recent updates</h3>
-      {(data.recent_updates || []).length === 0 ? (
-        <p>No updates this week.</p>
-      ) : (
-        <ul>
-          {data.recent_updates.map((u) => (
-            <li key={u.id}>
-              <strong>{u.project_name}</strong> — {u.body}{' '}
-              <small>
-                ({u.first_name} {u.last_name})
-              </small>
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className="page-head">
+        <h1>My work</h1>
+        <p className="page-sub">Everything assigned to you, at a glance.</p>
+      </div>
+      <div className="grid stats">
+        <Stat num={openCount} label="Open tasks" />
+        <Stat num={overdue} label="Overdue" />
+        <Stat num={data.projects?.length ?? 0} label="Active projects" />
+        <Stat num={data.watching?.length ?? 0} label="Watched" />
+      </div>
+      {overdue > 0 && <Alert>{overdue} task{overdue === 1 ? ' is' : 's are'} overdue — see Open tasks below.</Alert>}
+      <div className="grid cols-2">
+        <Card title="Open tasks">
+          {(data.open_tasks || []).length === 0 ? (
+            <Empty>Nothing assigned. Enjoy the quiet.</Empty>
+          ) : (
+            <ul className="rows">
+              {data.open_tasks.map((t) => {
+                const isOverdue = t.due_date && String(t.due_date).slice(0, 10) < today;
+                return (
+                  <li key={t.id}>
+                    <div className="grow">
+                      <strong>{t.title}</strong>
+                      <div><small>{t.project_name}</small></div>
+                    </div>
+                    <Badge kind={t.status}>{t.status}</Badge>
+                    {t.due_date && (
+                      <small className={isOverdue ? 'overdue' : 'muted'}>
+                        due {String(t.due_date).slice(0, 10)}{isOverdue ? ' — OVERDUE' : ''}
+                      </small>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Card>
+        <Card title="My projects">
+          {(data.projects || []).length === 0 ? (
+            <Empty>No projects yet.</Empty>
+          ) : (
+            <ul className="rows">
+              {data.projects.map((p) => (
+                <li key={p.id}>
+                  <div className="grow"><strong>{p.name}</strong></div>
+                  <Badge kind={p.my_role}>{p.my_role}</Badge>
+                  <Badge kind={p.status}>{p.status}</Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+      <div className="grid cols-2">
+        <Card title="Watched">
+          {(data.watching || []).length === 0 ? (
+            <Empty>Nothing watched.</Empty>
+          ) : (
+            <ul className="rows">
+              {data.watching.map((t) => (
+                <li key={t.id}>
+                  <div className="grow">
+                    <strong>{t.title}</strong>
+                    <div><small>{t.project_name}</small></div>
+                  </div>
+                  <Badge kind={t.status}>{t.status}</Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+        <Card title="Recent updates">
+          {(data.recent_updates || []).length === 0 ? (
+            <Empty>No updates this week.</Empty>
+          ) : (
+            <ul className="rows">
+              {data.recent_updates.map((u) => (
+                <li key={u.id}>
+                  <div className="grow">
+                    <strong>{u.project_name}</strong> — {u.body}
+                    <div><small>{u.first_name} {u.last_name}</small></div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
       {profileId && <Profile id={profileId} onClose={() => setProfileId(null)} />}
       {/* Expose profile opener for sibling views via custom event */}
       <ProfileOpener onOpen={setProfileId} />

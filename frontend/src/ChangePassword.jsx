@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from './adminApi.js';
 import { useAuth } from './AuthContext.jsx';
+import { Alert } from './ui.jsx';
 
 // Forced on first login (must_change_password) and available as self-service.
 export default function ChangePassword({ forced }) {
@@ -33,27 +34,31 @@ export default function ChangePassword({ forced }) {
     <section>
       <h2>{forced ? 'Set a new password to continue' : 'Change password'}</h2>
       {forced && (
-        <p>Your admin gave you a temporary password. Choose your own password (min 8 characters) to enter the portal.</p>
+        <Alert kind="note">Your admin gave you a temporary password. Choose your own password (min 8 characters) to enter the portal.</Alert>
       )}
       <form onSubmit={submit}>
-        <input
-          placeholder="current / temporary password"
-          type="password"
-          value={oldPassword}
-          onChange={(e) => setOldPassword(e.target.value)}
-          autoComplete="current-password"
-        />
-        <input
-          placeholder="new password (min 8 chars)"
-          type="password"
-          value={newPassword}
-          onChange={(e) => setNewPassword(e.target.value)}
-          autoComplete="new-password"
-        />
-        <button type="submit">Save new password</button>
+        <div className="field">
+          <span>Current / temporary password</span>
+          <input
+            type="password"
+            value={oldPassword}
+            onChange={(e) => setOldPassword(e.target.value)}
+            autoComplete="current-password"
+          />
+        </div>
+        <div className="field">
+          <span>New password (min 8 chars)</span>
+          <input
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            autoComplete="new-password"
+          />
+        </div>
+        <button className="btn btn-primary" type="submit">Save new password</button>
       </form>
-      {msg && <p style={{ color: 'darkred' }}>Error: {msg}</p>}
-      {ok && <p style={{ color: 'darkgreen' }}>{ok}</p>}
+      {msg && <Alert>{msg}</Alert>}
+      {ok && <Alert kind="ok">{ok}</Alert>}
     </section>
   );
 }
