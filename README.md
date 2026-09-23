@@ -2,70 +2,211 @@
 
 ![CI](https://github.com/Manikanta070610/open-teams/actions/workflows/ci.yml/badge.svg?branch=mvp)
 ![PostgreSQL 15+](https://img.shields.io/badge/PostgreSQL-15-336791?logo=postgresql&logoColor=white)
-![Node 22](https://img.shields.io/badge/Node-22-339933?logo=node.js&logoColor=white)
+![Node 20+](https://img.shields.io/badge/Node-20+-339933?logo=node.js&logoColor=white)
 ![React 18](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-**The whole office in one portal** — people, departments, projects, tasks, HR requests, and team chat — with one simple rule enforced everywhere: *work only ever flows downhill.*
+**Open-source office HQ — people, departments, projects, tasks, HR requests, and team chat in one secure portal.**
+
+Open Teams gives every employee a single place to do their work, while giving administrators a locked-down back office for identity, access, and security. One clear authorization model governs everything: **work only ever flows downhill.**
+
+> Built with boring, dependable technology — **PostgreSQL, Node.js + Express, React + Vite** — with business rules enforced in the database, not just the UI. Run it on a laptop, a $10 VPS, or scale it on AWS. No cloud lock-in.
 
 ---
 
-- [What is this?](#what-is-this)
-- [Take the 5-minute tour](#take-the-5-minute-tour)
-- [Meet the demo company](#meet-the-demo-company)
-- [The one rule that runs everything](#the-one-rule-that-runs-everything)
-- [Tour of the screens](#tour-of-the-screens)
-- [How it's built](#how-its-built)
-- [Run it yourself](#run-it-yourself)
-- [Deploy it anywhere](#deploy-it-anywhere)
-- [API at a glance](#api-at-a-glance)
-- [Contribute](#contribute)
+## Table of Contents
+
+- [Why Open Teams](#why-open-teams)
+- [Key Features](#key-features)
+- [How Authorization Works](#how-authorization-works)
+- [Tech Stack](#tech-stack)
+- [Architecture](#architecture)
+- [Quickstart](#quickstart)
+- [Demo Organization](#demo-organization)
+- [Using the Application](#using-the-application)
+- [API Overview](#api-overview)
+- [Project Structure](#project-structure)
+- [Deployment](#deployment)
+- [Security](#security)
+- [Testing & Contributing](#testing--contributing)
 - [License](#license)
 
 ---
 
-## What is this?
+## Why Open Teams
 
-Imagine your company as a building. Open Teams is the directory in the lobby, the project rooms upstairs, the HR desk on the third floor, and the hallways where people actually talk — all in one web app.
+Most teams juggle five tools: an HR system, a project tracker, a task list, a directory, and chat. Context gets lost, permissions drift, and onboarding is painful.
 
-Concretely, it gives every employee a portal (branded **Office HQ**) where they can see their own work, run projects with tasks and deadlines, staff teams without overloading people, file HR requests, and chat — one-on-one or in groups. Admins get a separate, locked-down back-office for managing people, logins, and security.
+Open Teams consolidates the daily workflow into two focused surfaces:
 
-Underneath, it's deliberately boring technology: **PostgreSQL** for data, **Node + Express** for the API, **React** for the UI. No exotic frameworks, no cloud lock-in — you can run the entire thing on a laptop or a ten-dollar server.
+1. **Employee Portal (`Office HQ`)** — what everyone uses every day: my work, projects, long-lived team workspaces, company chat, and directory.
+2. **Back Office (`Admin`)** — a separate, private surface for managing people, logins, email domains, sessions, and audit logs.
 
-## Take the 5-minute tour
+Both share one PostgreSQL database where delegation, HR, and department rules are enforced by triggers — so permissions hold no matter which client calls the API.
 
-You need Node 20+ and PostgreSQL 15+. That's it.
+---
+
+## Key Features
+
+### People & Organization
+- Company directory with rank-based visibility and individual profiles
+- Departments (Engineering, Sales, Finance, Marketing, HR, IT) with chief-only governance
+- Email-domain allow-list enforced at the database level
+
+### Projects & Tasks
+- Projects with charter, lifecycle, members, and roles (`owner` / `lead` / `member`)
+- Tasks and subtasks with assignment, deadlines, comments, and full activity history
+- Weekly status updates and project-level chat
+- Workload-aware staffing: see active projects, open tasks, and allocation before adding someone, with `HEAVY LOAD` warnings
+
+### Team Workspaces
+- Long-lived team homes for departments and persistent groups
+- Staffing requests fulfilled through a structured approval flow
+- Role promotions with hierarchy checks
+
+### HR Requests
+- Anyone can file a ticket; tickets can only be assigned to HR staff
+- Clean separation between requesters and resolvers
+
+### Company Chat
+- Group channels (public, department, private) with join/leave and membership control
+- 1:1 direct messages, read receipts, and project-scoped chat threads
+
+### Administration
+- Employee provisioning, activation/deactivation, and one-time temporary passwords with forced change on first login
+- Session management with sliding inactivity expiry
+- Admin IP allow-listing, auth policy controls, and a full auth audit log
+- Public and admin bundles built and verified separately — admin code never leaks into the employee bundle
+
+---
+
+## How Authorization Works
+
+Every permission derives from a single, auditable principle:
+
+> **Work flows downhill. You can delegate to your own rank or below — never above, never to yourself.**
+
+| Example | Allowed | Reason |
+|---|---|---|
+| Manager (4) assigns task to Junior (1) | ✅ Yes | Downhill delegation |
+| Junior (1) assigns task to Manager (4) | ❌ No | Uphill — rejected |
+| Senior (3) adds Associate (2) to project | ✅ Yes | Same rank or below |
+| Associate (2) removes Senior (3) | ❌ No | Uphill — rejected |
+| C-Suite (5+) renames department | ✅ Yes | Chiefs govern the org |
+| Manager (4) renames department | ❌ No | Chiefs only |
+
+Key guarantees:
+
+- **Enforced in PostgreSQL triggers**, not just API checks — direct SQL or API calls cannot bypass it.
+- **Single project owner** — promoting a new owner demotes the previous one atomically.
+- **Only project heads and chiefs** can grant head (`owner`/`lead`) roles.
+- **HR tickets** route only to HR staff.
+- The UI explains eligibility upfront (e.g. “Higher rank — ask a head or chief”), so errors are rare.
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Notes |
+|---|---|---|
+| Database | PostgreSQL 15+, 13 ordered migrations | Data + integrity rules + triggers + seed |
+| API | Node.js 20+ / Express 4, raw parameterized SQL | No ORM; split `public` / `admin` personalities |
+| Auth | scrypt passwords, short-lived JWE access tokens, rotating refresh cookies | Memory-only tokens, forced password reset, inactivity expiry |
+| Frontend | React 18 + Vite, hand-rolled CSS | Zero UI framework; separate public/admin builds |
+| DevOps | Docker Compose, Render Blueprint, GitHub Actions CI | One-command local or container setup |
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    P[Employee Portal<br/>React :5173] -->|/api| PUB[Public API<br/>Express :4000]
+    A[Back Office<br/>React :5174] -->|/api| ADM[Admin API<br/>Express :4001]
+    PUB --> DB[(PostgreSQL 15+<br/>data + rules + triggers)]
+    ADM --> DB
+```
+
+- `ADMIN_MODE=public` exposes only employee routes; `ADMIN_MODE=admin` exposes only admin routes (other routes return 404).
+- Production Docker Compose runs Postgres + both APIs + both portals together.
+- CI verifies migrations apply in order, tests pass, and bundles contain no cross-leaks.
+
+---
+
+## Quickstart
+
+**Prerequisites:** Node.js 20+, PostgreSQL 15+ (local mode) or Docker (container mode).
+
+### Option A — Local development (recommended)
 
 ```bash
 git clone https://github.com/Manikanta070610/open-teams.git
 cd open-teams
-./setup.sh            # interactive: asks questions, does everything
+./setup.sh            # interactive: configures backend/.env, installs, migrates, seeds, builds
 ```
 
-The setup script installs dependencies, builds the database (with a demo company inside), verifies it, and builds the app. Then:
+Then run:
 
 ```bash
 npm run dev --prefix backend     # API on :4000
-npm run dev --prefix frontend    # portal on :5173
+npm run dev --prefix frontend    # Employee portal on :5173
 ```
 
-Open http://localhost:5173. You'll land on the login page — which brings us to the demo company, because someone has to let you in.
+Back-office dev server (optional):
 
-> **Prefer Docker?** `./setup.sh --docker` boots Postgres, both APIs, and both portals in one stack. Details in [Deploy it anywhere](#deploy-it-anywhere).
+```bash
+VITE_BACKEND_TARGET=http://localhost:4001 npm run dev:admin --prefix frontend  # :5174
+```
 
-## Meet the demo company
+Open http://localhost:5173.
 
-Setup seeds a small fictional company so you can feel how the app behaves at different levels of power:
+### Option B — Full stack with Docker
 
-| Who | Email | Rank | Reports to |
-| --- | ----- | ---- | ---------- |
+```bash
+./setup.sh --docker
+docker compose up -d db && docker compose run --rm migrate
+docker compose up -d --build
+```
+
+- Employee portal: http://localhost:8080
+- Back office: http://localhost:8081 (keep private)
+- Public API: :4000 · Admin API: :4001
+
+Other setup flags:
+
+```bash
+./setup.sh --help               # all options
+./setup.sh --non-interactive    # servers / CI, reads env vars, no prompts
+```
+
+### Manual setup
+
+```bash
+createdb office_mgmt_final
+for f in db/*.sql; do psql -d office_mgmt_final -v ON_ERROR_STOP=1 -q -f "$f"; done
+cp backend/.env.example backend/.env   # set DATABASE_URL, AUTH_SECRET, SETUP_TOKEN
+npm install --prefix backend && npm install --prefix frontend
+npm test --prefix backend
+npm run dev --prefix backend
+npm run dev --prefix frontend
+```
+
+---
+
+## Demo Organization
+
+`./setup.sh` seeds a fictional 7-person company so you can evaluate every permission level immediately:
+
+| Name | Email | Rank | Reports To |
+|---|---|---|---|
 | Ava Owner, CEO | `ceo@example.com` | 6 — Owner | — |
 | Ben CTO | `cto@example.com` | 5 — C-Suite | Ava |
 | Cara Manager | `manager@example.com` | 4 — Manager | Ben |
 | Dev Senior | `l3@example.com` | 3 — Senior | Cara |
 | Eli Associate | `l2@example.com` | 2 — Associate | Dev |
 | Fay Junior | `l1@example.com` | 1 — Junior | Eli |
-| Hana HR | `hr@example.com` | 3 — Senior (HR dept) | Ava |
+| Hana HR | `hr@example.com` | 3 — Senior (HR) | Ava |
 
 ```
 Ava (6, CEO)
@@ -77,150 +218,136 @@ Ava (6, CEO)
 └── Hana (3, HR)
 ```
 
-Departments included: Engineering, Sales, Finance, Marketing, HR, IT — plus one cross-department project with members and a task already inside.
+Departments, a cross-department project, tasks, and chat history are pre-seeded.
 
-**Getting your first login:** the seed creates the *people*, but nobody has a password yet (that's by design — passwords are provisioned, never shipped). Bootstrap the first admin, then hand out logins from the back-office:
+**First login:** seed data creates people without passwords by design. Bootstrap the first admin, then provision the rest from the back office:
 
 ```bash
-# 1. Create the first admin ( CEO's account works: ceo@example.com )
+# 1. Create first admin ( CEO account works: ceo@example.com )
 curl -X POST http://localhost:4000/api/admin/bootstrap \
   -H 'content-type: application/json' \
   -d '{"email":"ceo@example.com","password":"PickAStrongOne123","setupToken":"<SETUP_TOKEN from backend/.env>"}'
-```
 
-```text
-# 2. Log in at http://localhost:5174/admin.html, open Employees → Add employee
-#    (or reset a seed account's password under Access), share the one-time
-#    temp password, and have them change it on first login.
+# 2. Log in at http://localhost:5174/admin.html → Employees → Add employee
+#    or Access → Reset password. Share the one-time temp password;
+#    users must change it on first login.
 # 3. Delete SETUP_TOKEN from backend/.env — first admin exists, door closed.
 ```
 
-Try this experiment: log in as **Fay** (rank 1) and try to assign a task to Cara. Then log in as **Cara** and assign one to Fay. One of these works. Guess which — then read the next section to learn why.
+> Try it: log in as Fay (rank 1) and attempt to assign a task to Cara — then log in as Cara and assign one to Fay. Only one succeeds. That is the downhill rule in action.
 
-## The one rule that runs everything
+---
 
-Every permission in Open Teams flows from a single idea:
+## Using the Application
 
-> **Work flows downhill.** You can delegate to your own rank or below — never above, never to yourself.
+**Employee Portal (`:5173`) — daily work:**
 
-| | Can do it? | Why |
-| --- | ---------- | --- |
-| Cara (4) assigns a task to Fay (1) | ✅ | downhill |
-| Fay (1) assigns a task to Cara (4) | ❌ | uphill — refused |
-| Dev (3) adds Eli (2) to a project | ✅ | downhill, peers included |
-| Eli (2) removes Dev (3) from a project | ❌ | uphill — refused |
-| Ben (5) renames a department | ✅ | chiefs reshape the org |
-| Cara (4) renames a department | ❌ | chiefs only (rank 5+) |
+| Tab | Purpose |
+|---|---|
+| **My Work** | Everything assigned to you — your homepage |
+| **Projects** | Charter, staffing, tasks + subtasks, comments, weekly updates, history, project chat |
+| **Workspaces** | Persistent team homes with request-based staffing |
+| **Chat** | Company groups and 1:1 DMs |
+| **Directory** | People search, profiles, and self-service password change |
 
-And here's the part people love: **the database itself enforces it**. These aren't polite UI hints that a clever API call can bypass — PostgreSQL triggers reject violations no matter who asks. The UI just explains *why* upfront ("Higher rank — ask a head or chief") so you rarely see an error at all.
+**Back Office (`:5174/admin.html`) — administration only:**
 
-A few more consequences of the rule:
-
-- **Projects** have heads (`owner`/`lead`) with full access. There's always exactly one owner — promoting a new one demotes the old. Only heads and chiefs hand out head roles.
-- **Anyone can file an HR ticket**, but it can only ever be assigned to HR staff (or nobody).
-- **Staffing shows workload** — when adding someone to a project you see their active projects, open tasks, and total allocation, with a HEAVY LOAD flag so heads don't burn people out.
-
-## Tour of the screens
-
-**Employee portal** (`:5173` — what everyone uses daily):
-
-| Tab | What's there |
-| --- | ------------ |
-| **My work** | Everything assigned to you, at a glance — your homepage |
-| **Projects** | Standalone projects: charter, staffing, tasks + subtasks, comments, weekly updates, full history, project chat |
-| **Workspaces** | Long-lived team homes where staffing flows through requests HR fulfills |
-| **Chat** | Company-wide groups (public, department, or private) and 1-1 DMs with anyone |
-| **Directory** | Everyone in the company, plus changing your own password |
-
-Clicking any person's name opens their profile (you'll only ever see people you're allowed to see).
-
-**Back-office** (`:5174/admin.html` — keep this URL private):
-
-| Tab | What's there |
-| --- | ------------ |
+| Tab | Purpose |
+|---|---|
 | Overview | Headcount and activity at a glance |
 | Employees | Search, edit, and provision logins |
-| Domains | Which email domains are allowed (enforced by the database) |
-| Access | Activate/deactivate people, reset passwords |
-| Security | Session timeouts, admin IP allow-listing, auth audit log |
+| Domains | Allowed email domains (DB-enforced) |
+| Access | Activate/deactivate users, reset passwords |
+| Security | Session timeouts, admin IP allow-list, auth audit log |
 
-## How it's built
+Destructive UI actions always ask for confirmation. All routes except `/health` require authentication.
 
-```mermaid
-flowchart LR
-    P[Employee portal<br/>React :5173] -->|/api| PUB[Public API<br/>Express :4000]
-    A[Back-office<br/>React :5174] -->|/api| ADM[Admin API<br/>Express :4001]
-    PUB --> DB[(PostgreSQL 15+<br/>data + rules + triggers)]
-    ADM --> DB
-```
+---
 
-| Layer | Choice | Why |
-| ----- | ------ | --- |
-| Data | PostgreSQL 15+, 13 ordered migrations | Triggers enforce delegation, HR, and department rules where no client can dodge them |
-| API | Node 22 + Express, raw parameterized SQL | Small, readable, no ORM magic; split into `public` / `admin` personalities so admin routes 404 from the employee surface |
-| Auth | scrypt passwords, short JWE access tokens, rotating refresh cookies | Memory-only access tokens, forced password change on first login, sliding inactivity expiry |
-| UI | React 18 + Vite, hand-rolled CSS | Zero UI framework, works offline, public/admin bundles verified leak-free at build time |
-
-## Run it yourself
-
-**Recommended — the setup program:**
-
-```bash
-./setup.sh               # local dev, asks you questions
-./setup.sh --docker      # everything in Docker (see below)
-./setup.sh --non-interactive   # servers & CI: reads env vars, no prompts
-./setup.sh --help        # every flag
-```
-
-**By hand**, if you like knowing what happens under the hood:
-
-```bash
-createdb office_mgmt_final
-for f in db/*.sql; do psql -d office_mgmt_final -v ON_ERROR_STOP=1 -q -f "$f"; done
-cp backend/.env.example backend/.env   # fill in DATABASE_URL, AUTH_SECRET, SETUP_TOKEN
-npm install --prefix backend && npm install --prefix frontend
-npm test --prefix backend              # 55 self-cleaning API tests
-npm run dev --prefix backend           # :4000
-npm run dev --prefix frontend          # :5173
-```
-
-## Deploy it anywhere
-
-| Where | How |
-| ----- | --- |
-| **Any VPS / EC2 / home server** | `./setup.sh --docker` — Postgres, both APIs, and both portals via `docker-compose.yml` (portal `:8080`, back-office `:8081`) |
-| **Render** | Push to GitHub → Dashboard → New → Blueprint. `render.yaml` provisions Postgres + all four services; copy the generated `AUTH_SECRET` to the admin backend |
-| **AWS, scaled out** | RDS Postgres for data, backend image to ECR + two ECS/App Runner services (`ADMIN_MODE=public` / `admin`), bundles on S3 + CloudFront. Keep the back-office behind IP rules or a private subnet |
-
-Whichever way: set a strong `AUTH_SECRET`, bootstrap the first admin, then **empty `SETUP_TOKEN`**.
-
-## API at a glance
-
-All routes except `/health` need a login. Destructive UI actions ask for confirmation first.
+## API Overview
 
 <details>
-<summary>Click to expand the endpoint map</summary>
+<summary><strong>Endpoint map (click to expand)</strong></summary>
 
 | Area | Base | Highlights |
-| ---- | ---- | ---------- |
+|---|---|---|
 | Auth | `/api/auth` | login, refresh (rotation), verify, change-password, sessions, logout, policy |
 | Admin | `/api/admin` | bootstrap, employees CRUD, email domains, overview, auth policy, allowed IPs, audit |
-| Projects | `/api/projects` | charter + lifecycle, members, candidates with workload, tasks/subtasks, comments, updates, activity, project chat |
-| Company chat | `/api/chat` | groups + visibility + members + join/leave, group chat, DM threads, read receipts |
+| Projects | `/api/projects` | charter + lifecycle, members, workload-aware candidates, tasks/subtasks, comments, updates, activity, project chat |
+| Company Chat | `/api/chat` | groups + visibility + members + join/leave, group chat, DM threads, read receipts |
 | Workspaces | `/api/workspaces` | teams, members, promotions, staffing requests, candidates |
-| Dashboard | `/api/dashboard` | my work, gated person profiles |
+| Dashboard | `/api/dashboard` | my work feed, gated person profiles |
 
 </details>
 
-## Contribute
+---
 
-```bash
-npm test --prefix backend     # must stay green — tests create and clean up after themselves
-npm run build --prefix frontend && npm run build:admin --prefix frontend
+## Project Structure
+
+```
+.
+├── backend/            # Express API (public/admin modes), auth, projects, chat, workspaces
+│   ├── src/            # Route handlers, DB layer, tokens, rate limits
+│   └── test/           # Self-cleaning API tests (admin, auth, chat, projects, workspaces)
+├── frontend/           # React + Vite — employee portal + back office (separate builds)
+│   └── src/            # App, AdminApp, Projects, Chat, Workspaces, Dashboard
+├── db/                 # 01–13 ordered SQL migrations + seed (schema, triggers, governance)
+├── docker-compose.yml  # Postgres + both APIs + both portals
+├── render.yaml         # Render Blueprint (DB + 4 services)
+└── setup.sh            # One-command local / Docker / CI setup
 ```
 
-Conventions: schema changes go in a new numbered `db/` migration (they apply in order, and CI checks them); business rules belong in Postgres triggers first, API second, UI hints third; the public bundle must never contain admin code (CI verifies this on every push).
+**Conventions:** schema changes go in a new numbered `db/` migration (CI checks ordering); business rules belong in Postgres triggers first, API second, UI hints third.
+
+---
+
+## Deployment
+
+| Target | Method |
+|---|---|
+| **Any VPS / EC2 / home server** | `./setup.sh --docker` — full stack via `docker-compose.yml` (portal `:8080`, back office `:8081`) |
+| **Render** | Push to GitHub → Dashboard → New → Blueprint. `render.yaml` provisions Postgres + all four services; copy generated `AUTH_SECRET` to the admin backend |
+| **AWS (scaled)** | RDS Postgres for data, backend image to ECR + two services (`ADMIN_MODE=public` / `admin`), static bundles on S3 + CloudFront. Keep the back office behind IP rules or a private subnet |
+
+After deploy: set a strong `AUTH_SECRET`, bootstrap the first admin, then empty `SETUP_TOKEN`.
+
+---
+
+## Security
+
+- scrypt password hashing; short-lived in-memory JWE access tokens + rotating refresh cookies
+- Forced password change on first login; sliding inactivity expiry
+- Rate-limited auth endpoints; admin IP allow-listing
+- Separate public/admin API personalities — admin routes 404 from the employee surface
+- Build-time verification that admin code never ships in the public bundle
+- Secrets live in `backend/.env` or root `.env` (both gitignored) — never commit them
+
+Found a vulnerability? Please open a private security advisory or contact the maintainers rather than filing a public issue.
+
+---
+
+## Testing & Contributing
+
+```bash
+npm test --prefix backend                          # API tests (self-cleaning — must stay green)
+npm run build --prefix frontend                    # public bundle
+npm run build:admin --prefix frontend              # admin bundle
+```
+
+Contributions are welcome — this is MIT-licensed open source:
+
+1. Fork the repo and create a feature branch
+2. Add a numbered migration under `db/` for schema changes
+3. Put business rules in Postgres triggers first, then API, then UI
+4. Ensure `npm test --prefix backend` passes and both frontend bundles build
+5. Open a pull request with a clear description and screenshots for UI changes
+
+Please keep PRs focused, follow the existing code style (raw SQL, small readable modules, hand-rolled CSS), and add tests for new API behavior.
+
+---
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+Built and maintained by the Open Teams contributors. If it helps your team, please star the repo and share feedback via issues.
